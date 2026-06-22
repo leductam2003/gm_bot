@@ -1,0 +1,28 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+vault.key
+
+# Local databases / state
+*.db
+*.db-*
+/data/
+/logs/
+/tlogs/
+/tmp/
+
+# Build artifacts
+/zyper-bot
+/zyper-bot.exe
+*.exe
+*.exe~
+
+# Reference / reverse-engineering artifacts (not part of the app)
+*.dc.html
+original-reference.png
+
+# Tooling / editor
+.omc/
+.DS_Store
+*.log

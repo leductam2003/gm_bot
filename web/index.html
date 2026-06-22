@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GM Suite</title>
+<link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="grain"></div>
+<div id="offlineBar" class="offline-bar hide">Cannot reach the backend. Make sure the app is running. Retrying…</div>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"><svg class="i" viewBox="0 0 24 24" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.5 5.5l2 2M16.5 16.5l2 2M18.5 5.5l-2 2M7.5 16.5l-2 2"/></svg></div>
+      <div class="name">GM<small>SUITE</small></div>
+    </div>
+    <div class="ver"><span id="wsState"></span></div>
+    <nav id="nav">
+      <a data-tab="home"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span><span class="lbl">Home</span></a>
+      <a data-tab="tasks" class="active"><span class="ic"><svg class="i" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="lbl">Tasks</span></a>
+      <a data-tab="wallets"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span><span class="lbl">Wallets</span></a>
+      <a data-tab="rpc"><span class="ic"><svg class="i" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span class="lbl">RPC</span></a>
+      <a data-tab="proxies"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="lbl">Proxies</span></a>
+      <a data-tab="whitelists"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span class="lbl">Whitelists</span></a>
+      <a data-tab="nft"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></span><span class="lbl">NFT</span></a>
+      <a data-tab="calculator"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="12" y1="14" x2="12" y2="14"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="18" x2="12" y2="18"/></svg></span><span class="lbl">Calculator</span></a>
+      <a data-tab="settings"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="lbl">Settings</span></a>
+      <a data-tab="logs"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="lbl">Logs</span></a>
+    </nav>
+    <div class="sb-foot">
+      <div class="verline"><span id="footVer">v1.3.0</span><span class="upd" onclick="go('settings');goSub('app');setTimeout(checkUpdate,300)" style="cursor:pointer">CHECK UPDATES</span></div>
+      <div class="clock"><svg class="i" viewBox="0 0 24 24"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg> <span id="clock">00:00:00</span> <span class="drift">+2.3s</span></div>
+      <div class="gwei"><svg class="i" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg> <span class="lbl">ETH</span> <b id="gwei">&mdash;</b> <span style="font-size:9px;color:var(--muted3)">gwei</span></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="crumb">SUITE / <b id="crumb">TASKS</b></div>
+      <div class="dots">
+        <span class="y" onclick="wMin(event)" title="Minimize"></span>
+        <span class="g" onclick="wMax(event)" title="Maximize"></span>
+        <span class="r" onclick="wClose(event)" title="Close"></span>
+        <span class="help">?</span>
+      </div>
+    </div>
+    <div class="content">
+
+      <!-- HOME -->
+      <section id="tab-home" class="hide">
+        <div class="grid" id="homeCards"></div>
+      </section>
+
+      <!-- TASKS -->
+      <section id="tab-tasks">
+        <div class="groups" id="taskGroups"></div>
+        <div class="card">
+          <div class="panel-head">
+            <div class="title"><span id="curGroup">Imported</span> <span class="sub" id="taskCount">&middot; 0 Tasks</span></div>
+            <div class="selbar" id="taskSelbar" style="display:none">
+              <span class="seln"><b id="taskSelN">0</b> task(s) selected</span>
+              <button class="sm primary" onclick="bulkTask('start')">Start</button>
+              <button class="sm" onclick="bulkTask('stop')">Stop</button>
+              <button class="sm" onclick="bulkTask('boost')">Boost</button>
+              <button class="sm" onclick="editSelected()">Edit</button>
+              <button class="sm danger" onclick="bulkDeleteTasks()">Delete</button>
+              <span class="selclear" onclick="taskSelectAll(false)">Clear</span>
+            </div>
+            <div class="toolbtns">
+              <button class="icon" title="Refresh" onclick="loadTasks()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+              <button class="icon" title="Boost group" onclick="boostGroup()"><svg class="i" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></button>
+              <button class="primary sm" onclick="openTaskModal()">+ New Task</button>
+            </div>
+          </div>
+          <table>
+            <thead><tr><th style="width:34px"><input type="checkbox" id="taskSelAll" onchange="taskSelectAll(this.checked)" /></th><th>Wallet</th><th>Gas Fee</th><th>Value</th><th>Mode</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody id="taskRows"></tbody>
+          </table>
+          <div class="actbar">
+            <div class="left"><span id="taskSelInfo"><b>0</b> selected</span><div class="meta" id="taskGroupInfo">0 items shown &middot; live</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WALLETS -->
+      <section id="tab-wallets" class="hide">
+        <div class="groups" id="walletGroups"></div>
+        <div class="card">
+          <div class="panel-head">
+            <div class="title">Wallets <span class="sub" id="walletCount">&middot; 0</span></div>
+            <div class="toolbtns">
+              <select id="balChain" style="min-width:150px"></select>
+              <button class="sm" onclick="openFundsModal()">Manage Funds</button>
+              <button class="sm" onclick="openImpModal()">Import</button>
+              <button class="primary sm" onclick="openGenModal()">Generate</button>
+              <button class="icon" title="Balances" onclick="loadBalances()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            </div>
+          </div>
+          <div class="tscroll">
+            <table>
+              <thead><tr><th style="width:26px"><input type="checkbox" id="walSelAll" onchange="walSelectAll(this.checked)" /></th><th>Name</th><th>Address</th><th>Balance</th><th style="text-align:right">Actions</th></tr></thead>
+              <tbody id="walletRows"></tbody>
+            </table>
+          </div>
+          <div class="actbar" id="walActbar" style="display:none">
+            <div class="left"><span id="walSelInfo"><b>0</b> selected</span> &middot; <span class="selclear" onclick="walSelectAll(false)">Clear</span></div>
+            <div class="right">
+              <button class="sm" onclick="copySelAddrs()">Copy Addresses</button>
+              <button class="sm" onclick="copySelKeys()">Copy Private Keys</button>
+              <button class="sm danger" onclick="delSelWallets()">Delete</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RPC -->
+      <section id="tab-rpc" class="hide">
+        <div class="card">
+          <div class="panel-head">
+            <div class="title">RPC <span class="sub" id="rpcCount">&middot; 0 Endpoints</span></div>
+            <div class="toolbtns">
+              <button class="sm" onclick="testRPC()">Test All</button>
+              <button class="primary sm" onclick="openRpcModal()">Add RPC</button>
+            </div>
+          </div>
+          <table>
+            <thead><tr><th style="width:26px"></th><th>Name</th><th>Chain</th><th>URL</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody id="rpcRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- CALCULATOR -->
+      <section id="tab-calculator" class="hide">
+        <div class="card">
+          <h2>Unix Time Converter</h2>
+          <div class="grid">
+            <label class="fld">Unix Timestamp<input id="unixTs" /></label>
+            <label class="fld">Local Date &amp; Time<input id="localDt" readonly /></label>
+          </div>
+          <div class="muted" id="unixOut" style="margin-top:8px"></div>
+          <div class="row" style="margin-top:8px"><button class="sm" onclick="setNow()">Now</button></div>
+        </div>
+        <div class="card">
+          <h2>Gas Calculator</h2>
+          <div class="grid">
+            <label class="fld">Gas Usage<input id="gcUsage" value="200000" /></label>
+            <label class="fld">Fail Usage<input id="gcFail" value="40000" /></label>
+            <label class="fld">NFT Amount<input id="gcAmt" value="1" /></label>
+            <label class="fld">NFT Price<input id="gcPrice" value="0" /></label>
+          </div>
+          <table class="calc-table" style="margin-top:14px">
+            <thead><tr><th>GWEI</th><th>AVG USAGE</th><th>AVG FAIL</th><th>BALANCE NEEDED</th><th>AVG COST / NFT</th></tr></thead>
+            <tbody id="gcRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="hide">
+        <div class="settings-wrap">
+          <div class="subnav">
+            <a class="subnav-item active" data-sub="app" onclick="goSub('app')">APP</a>
+            <a class="subnav-item" data-sub="setup" onclick="goSub('setup')">SETUP</a>
+            <a class="subnav-item" data-sub="social" onclick="goSub('social')">SOCIAL</a>
+          </div>
+          <div class="subbody">
+            <!-- ===== APP ===== -->
+            <div id="sub-app">
+              <div class="card">
+                <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.0</span></div></div>
+                <p class="muted" style="margin-top:-4px">Check the configured GitHub release repo for a newer build. Auto-download/restart is added once a trusted release repo is set; data is kept (stored next to the exe).</p>
+                <label class="fld">Update source (GitHub owner/repo)<input id="setUpdRepo" placeholder="owner/zyper-bot" /></label>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="checkUpdate()">Check for Update</button><button class="sm" onclick="saveUpdRepo()">Save Repo</button><span class="muted" id="updStatus"></span></div>
+              </div>
+              <div class="card">
+                <h2>API Keys</h2>
+                <p class="muted" style="margin-top:-4px">Set keys here instead of editing the .env file — saved on this machine and applied immediately.</p>
+                <div class="grid">
+                  <label class="fld" style="grid-column:1/-1">OpenSea API Keys <span class="muted" style="text-transform:none">— one per line; rotated to spread the rate limit, fails over if one is throttled. <a href="https://docs.opensea.io/reference/api-keys" target="_blank">Get one</a></span>
+                    <textarea id="setOpensea" rows="2" placeholder="paste one or more OpenSea keys, one per line"></textarea></label>
+                  <label class="fld" style="grid-column:1/-1">Etherscan API Key <span class="muted" style="text-transform:none">— ABI fetch / tx-replay decode (all EVM chains). <a href="https://etherscan.io/myapikey" target="_blank">Get one</a></span>
+                    <div class="row" style="margin:0;gap:6px"><input id="setEtherscan" type="password" placeholder="paste Etherscan key (optional)" style="flex:1" /><button class="icon" title="Show/Hide" onclick="toggleReveal('setEtherscan')">👁</button></div></label>
+                </div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveApiKeys()">Save Keys</button><span class="muted" id="setKeysStatus"></span></div>
+              </div>
+              <div class="card">
+                <h2>Appearance</h2>
+                <p class="muted" style="margin-top:-4px">Scale the whole UI. Saved on this machine.</p>
+                <div class="row" style="gap:14px;align-items:center">
+                  <span class="muted">80%</span>
+                  <input id="setScale" type="range" min="80" max="150" step="5" value="100" oninput="onScaleInput()" style="flex:1" />
+                  <span class="muted">150%</span>
+                  <span class="mono" id="setScaleVal" style="min-width:48px;text-align:right">100%</span>
+                  <button class="sm" onclick="resetScale()">Reset</button>
+                </div>
+              </div>
+              <div class="card">
+                <h2>Discord Webhook</h2>
+                <p class="muted" style="margin-top:-4px">Get a ping when tasks finish. Create one in your server: Channel settings → Integrations → Webhooks → New Webhook → Copy URL.</p>
+                <div class="row" style="margin:0;gap:6px">
+                  <input id="setDiscord" type="password" placeholder="https://discord.com/api/webhooks/..." style="flex:1" />
+                  <button class="icon" title="Show/Hide" onclick="toggleReveal('setDiscord')">👁</button>
+                  <button class="sm" onclick="testDiscord()">Test</button>
+                </div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveDiscord()">Save</button><span class="muted" id="setDiscordStatus"></span></div>
+              </div>
+            </div>
+            <!-- ===== SETUP ===== -->
+            <div id="sub-setup" class="hide">
+              <div class="card">
+                <h2>Task Defaults</h2>
+                <p class="muted" style="margin-top:-4px">Applied to new tasks. Per-task overrides still win.</p>
+                <div class="grid">
+                  <label class="fld">Default Delay (ms)<input id="setDefDelay" placeholder="0" /></label>
+                  <label class="fld">Default Multi-RPC<select id="setDefMulti"><option value="false">no</option><option value="true">yes</option></select></label>
+                  <label class="fld">Spam Guardrail (s)<input id="setSpamGuard" placeholder="120" /></label>
+                </div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveTaskDefaults()">Save Defaults</button><span class="muted" id="setDefStatus"></span></div>
+              </div>
+              <div class="card">
+                <h2>Flashbots Tuning</h2>
+                <p class="muted" style="margin-top:-4px">Bundle defaults for tasks with Flashbots on (ETH mainnet). Priority/Max apply only when the task's fees are "auto" — builders pick by economics, so lower than a public gas race is fine. Leave blank to use the general gwei.</p>
+                <div class="grid">
+                  <label class="fld">Bundle Window (blocks)<input id="setFbWindow" placeholder="4" /></label>
+                  <label class="fld">Priority Fee (gwei)<input id="setFbPrio" placeholder="auto" /></label>
+                  <label class="fld">Max Fee (gwei)<input id="setFbMax" placeholder="auto" /></label>
+                </div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveFlashbots()">Save</button><span class="muted" id="setFbStatus"></span></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><div class="title">Chains</div><div class="toolbtns"><button class="primary sm" onclick="saveChains()">Save Chains</button><span class="muted" id="setChainsStatus"></span></div></div>
+                <p class="muted" style="margin-top:-4px">Toggle chains you use (hides the rest from pickers). Optionally override the built-in public RPC — used as the fallback when a task has no RPC and none is set on the RPC page.</p>
+                <div class="chains-grid" id="chainsGrid"></div>
+                <div class="row" style="margin-top:14px;gap:8px;flex-wrap:wrap;align-items:flex-end;border-top:1px solid var(--line);padding-top:14px">
+                  <label class="fld" style="width:88px">Chain ID<input id="ccId" placeholder="999" /></label>
+                  <label class="fld" style="flex:1;min-width:110px">Name<input id="ccName" placeholder="MyChain" /></label>
+                  <label class="fld" style="width:84px">Symbol<input id="ccSym" placeholder="ETH" /></label>
+                  <label class="fld" style="flex:2;min-width:170px">RPC URL<input id="ccRpc" placeholder="https://rpc.mychain.xyz" /></label>
+                  <button class="sm" onclick="addCustomChain()">+ Add Custom Chain</button>
+                </div>
+              </div>
+            </div>
+            <!-- ===== SOCIAL ===== -->
+            <div id="sub-social" class="hide">
+              <div class="card">
+                <h2>Telegram &mdash; Remote Control / Mint</h2>
+                <p class="muted" style="margin-top:-4px">Create a bot via @BotFather and paste its token. Send the bot a message to get your chat id (it replies with your id).</p>
+                <div class="grid">
+                  <label class="fld" style="grid-column:1/-1">Bot Token<input id="tgToken" placeholder="123456:ABC-..." /></label>
+                  <label class="fld" style="grid-column:1/-1">Allowed Chat IDs (comma-separated)<input id="tgChats" placeholder="111222333, 444555666" /></label>
+                  <label class="fld">Notify<select id="tgNotify"><option value="summary">task done + errors</option><option value="all">every tx</option><option value="off">off</option></select></label>
+                  <label class="fld">Enable<select id="tgEnabled"><option value="true">on</option><option value="false">off</option></select></label>
+                  <label class="fld">Remote unlock<select id="tgUnlock"><option value="false">off (safer)</option><option value="true">on (risky)</option></select></label>
+                </div>
+                <div class="warnbox" id="tgUnlockWarn" style="display:none">Remote unlock: your password travels through the Telegram chat (not E2E). The bot deletes the message but a risk remains. Enable only if you understand it.</div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveTelegram()">Save &amp; Start</button><span class="muted" id="tgStatus"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOGS -->
+      <section id="tab-logs" class="hide">
+        <div class="card">
+          <div class="panel-head"><div class="title">Logs</div>
+            <div class="toolbtns">
+              <select id="logCat"><option value="">all</option><option value="tx">tx</option><option value="task">task</option><option value="error">error</option><option value="api">api</option></select>
+              <select id="logLevel"><option value="">all levels</option><option>DEBUG</option><option>INFO</option><option>WARN</option><option>ERROR</option></select>
+              <label class="row" style="margin:0;gap:5px"><input type="checkbox" id="logAutoscroll" checked /> autoscroll</label>
+              <button class="sm" onclick="clearLogView()">Clear</button>
+            </div>
+          </div>
+          <div id="logstream"></div>
+        </div>
+      </section>
+
+      <!-- placeholder pages -->
+      <section id="tab-accounts" class="hide"><div class="card"><div class="stub"><div class="big">Accounts</div>Group wallets into profiles and attach proxies.<br/>Coming in a later phase.</div></div></section>
+      <section id="tab-proxies" class="hide">
+        <div class="groups" id="proxyGroups"></div>
+        <div class="card">
+          <div class="panel-head">
+            <div class="title">Proxies <span class="sub" id="proxyCount">&middot; 0</span></div>
+            <div class="toolbtns">
+              <button class="sm" onclick="testProxies()">Test All</button>
+              <button class="primary sm" onclick="openProxyModal()">+ Add Proxies</button>
+            </div>
+          </div>
+          <div class="tscroll">
+            <table>
+              <thead><tr><th>Proxy</th><th>Group</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+              <tbody id="proxyRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      <section id="tab-whitelists" class="hide">
+        <div class="card">
+          <div class="row" style="align-items:flex-end;gap:12px;flex-wrap:wrap">
+            <label class="fld" style="flex:2;min-width:240px">Drop Link<input id="wlLink" placeholder="https://opensea.io/collection/... (or contract address)" /></label>
+            <label class="fld" style="flex:1;min-width:150px">Wallets<div class="wsel" id="wlWsel"></div></label>
+            <label class="fld" style="width:140px">Proxy Group<select id="wlProxy"><option value="">none</option></select></label>
+            <label class="fld" style="width:84px">Threads<input id="wlThreads" value="5" /></label>
+            <button class="primary sm" id="wlCheckBtn" onclick="wlCheck()">Check</button>
+          </div>
+          <div class="muted" style="font-size:11px;text-transform:none;margin-top:8px">Each wallet signs in to OpenSea (SIWE) and its per-phase eligibility is read. Use a proxy group + lower threads for many wallets — OpenSea throttles per IP.</div>
+        </div>
+        <div class="card" id="wlResultCard" style="display:none">
+          <div class="panel-head"><div class="title">Eligibility <span class="sub" id="wlSummary"></span></div></div>
+          <div class="tscroll">
+            <table><thead id="wlThead"></thead><tbody id="wlRows"></tbody></table>
+          </div>
+          <div class="muted" style="font-size:11px;text-transform:none;margin-top:8px">✓ number = cumulative wallet cap through that phase · — = not eligible for that phase.</div>
+        </div>
+      </section>
+      <!-- NFT manager (OpenSea) -->
+      <section id="tab-nft" class="hide">
+        <div class="card">
+          <div class="row" style="align-items:flex-end">
+            <label class="fld" style="flex:2;min-width:240px">Contract Address<input id="nftContract" placeholder="0x..." /></label>
+            <label class="fld" style="min-width:150px">Chain<select id="nftChain"></select></label>
+            <label class="fld" style="flex:1;min-width:180px">Wallets<div class="wsel" id="nftWsel"></div></label>
+            <button class="icon" title="Load NFTs" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            <button class="sm" onclick="nftToggleMint()">Mint Drop</button>
+          </div>
+          <div id="nftDrop"></div>
+        </div>
+        <div class="card" id="nftManagerCard" style="display:none">
+          <div class="panel-head">
+            <div class="title"><span id="nftCount">0 NFTs</span> <span class="sub" id="nftWalletInfo"></span></div>
+            <div class="toolbtns"><button class="icon" title="Reload" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></div>
+          </div>
+          <div class="nft-grid" id="nftGrid"></div>
+          <div class="actbar" id="nftActbar" style="display:none">
+            <div class="left"><span id="nftSelInfo">0 selected</span> &middot; <span class="muted" style="cursor:pointer" onclick="nftClearSel()">Clear</span></div>
+            <div class="right">
+              <button class="sm danger" onclick="nftCancel()">Cancel Listings (<span id="nftCancelN">0</span>)</button>
+              <button class="sm" onclick="nftSend()">Send Selected</button>
+              <button class="primary sm" onclick="nftList()">List Selected</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ===== List Selected modal ===== -->
+<div class="overlay" id="listModal">
+  <div class="modal" style="width:460px">
+    <div class="mhead"><h3>List Selected on OpenSea</h3><span class="close" onclick="closeModal('listModal')">&times;</span></div>
+    <div class="mbody">
+      <div class="grid">
+        <label class="fld">Price (ETH)<input id="listPrice" placeholder="0.05" /></label>
+        <label class="fld">Duration (days)<input id="listDuration" value="30" /></label>
+      </div>
+      <div class="muted" id="listSummary" style="margin-top:10px"></div>
+      <div class="warnbox">Listing signs a Seaport order off-chain (no gas). The first listing per collection needs a one-time on-chain approval (gas). Vault must be unlocked.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('listModal')">Cancel</button>
+      <button class="primary" onclick="nftListConfirm()">List</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Send Selected modal ===== -->
+<div class="overlay" id="sendModal">
+  <div class="modal" style="width:460px">
+    <div class="mhead"><h3>Send Selected</h3><span class="close" onclick="closeModal('sendModal')">&times;</span></div>
+    <div class="mbody">
+      <label class="fld">Destination Address<input id="sendDest" placeholder="0x..." /></label>
+      <div class="muted" id="sendSummary" style="margin-top:10px"></div>
+      <div class="warnbox">Creates one transfer task per NFT (safeTransferFrom), signed by each owner wallet. Runs as Action tasks (gas). Review in the Tasks tab before they confirm.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('sendModal')">Cancel</button>
+      <button class="primary" onclick="nftSendConfirm()">Create transfer tasks</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Mass Edit modal ===== -->
+<div class="overlay" id="massEditModal">
+  <div class="modal" style="width:560px">
+    <div class="mhead"><h3>Mass Edit <span class="muted" id="massCount"></span></h3><span class="close" onclick="closeModal('massEditModal')">&times;</span></div>
+    <div class="mbody">
+      <p class="muted" style="margin-top:-4px">Tick a field to apply it to every selected task; unticked fields are left unchanged. Tasks that are running will be skipped.</p>
+      <div class="grid">
+        <label class="fld" style="grid-column:1/3"><span><input type="checkbox" id="meContractOn"> Contract / Launchpad</span><input id="meContract" placeholder="0x…" /></label>
+        <label class="fld"><span><input type="checkbox" id="meChainOn"> Chain</span><select id="meChain"></select></label>
+        <label class="fld" style="grid-column:1/3"><span><input type="checkbox" id="meFnOn"> Function</span><input id="meFn" placeholder="mint(uint256,address)" /></label>
+        <label class="fld" style="grid-column:3/4"><span><input type="checkbox" id="meValueOn"> Value (wei)</span><input id="meValue" placeholder="0" /></label>
+        <label class="fld" style="grid-column:1/4"><span><input type="checkbox" id="meParamsOn"> Parameters</span><input id="meParams" placeholder="param1;param2 ({address}=wallet)" /></label>
+        <label class="fld"><span><input type="checkbox" id="meModeOn"> Mode</span><select id="meMode"><option value="simulate">simulate</option><option value="spam">spam</option><option value="action">action</option></select></label>
+        <label class="fld"><span><input type="checkbox" id="meStartOn"> Start Time (unix)</span><input id="meStart" placeholder="0 = now" /></label>
+        <label class="fld"><span><input type="checkbox" id="meGroupOn"> Group</span><input id="meGroup" placeholder="Imported" /></label>
+        <label class="fld"><span><input type="checkbox" id="meGasModeOn"> Gas mode</span><select id="meGasMode"><option value="auto">auto</option><option value="manual">manual</option></select></label>
+        <label class="fld"><span><input type="checkbox" id="meMaxFeeOn"> Max Fee (gwei)</span><input id="meMaxFee" /></label>
+        <label class="fld"><span><input type="checkbox" id="mePrioOn"> Priority (gwei)</span><input id="mePrio" /></label>
+        <label class="fld"><span><input type="checkbox" id="meDelayOn"> Delay (ms)</span><input id="meDelay" /></label>
+        <label class="fld"><span><input type="checkbox" id="meConcOn"> Concurrency</span><input id="meConc" /></label>
+        <label class="fld"><span><input type="checkbox" id="meMultiOn"> Multi-RPC</span><select id="meMulti"><option value="false">no</option><option value="true">yes</option></select></label>
+        <label class="fld"><span><input type="checkbox" id="meFlashOn"> Flashbots</span><select id="meFlash"><option value="false">off</option><option value="true">on</option></select></label>
+      </div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('massEditModal')">Cancel</button>
+      <button class="primary" id="massApplyBtn" onclick="applyMassEdit()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- toasts -->
+<div class="toasts" id="toasts"></div>
+
+<!-- ===== Create Task modal ===== -->
+<div class="overlay" id="taskModal">
+  <div class="modal">
+    <div class="mhead"><h3 id="taskModalTitle">Create Task</h3><span class="close" onclick="closeModal('taskModal')">&times;</span></div>
+    <div class="mbody">
+      <div class="grid">
+        <label class="fld" style="grid-column:1/2">Contract Address / Launchpad Link<input id="tContract" placeholder="0x..." /></label>
+        <label class="fld">Chain<select id="tChain"></select></label>
+      </div>
+      <div class="row" id="fnRow" style="margin:12px 0 4px;gap:10px;align-items:flex-end">
+        <label class="fld" style="flex:1">Function<input id="tFn" placeholder="mint(uint256,address)" /></label>
+        <button class="sm" type="button" id="abiToggleBtn" onclick="toggleAbi()" title="Paste/fetch ABI to pick a function">ABI</button>
+        <button class="sm" type="button" onclick="fetchAbi(event)" title="Fetch verified ABI from the block explorer">Fetch ABI</button>
+        <label class="row" style="margin:0 0 4px;gap:6px"><input type="checkbox" id="tHex" onchange="toggleHex()" /> Hex</label>
+      </div>
+      <label class="fld hide" id="hexFld">Raw calldata<input id="tRawHex" placeholder="0x..." /></label>
+      <div id="abiBlock" class="hide" style="margin:4px 0">
+        <label class="fld hide" id="abiFnFld" style="margin-bottom:8px">Pick a function from the ABI<select id="tAbiFn" onchange="onAbiFnPick()"></select></label>
+        <label class="fld">Contract ABI (paste here, or click Fetch ABI)<textarea id="tAbi" rows="2" oninput="onAbiInput()" placeholder='[{"type":"function","name":"mint","inputs":[{"type":"uint256"}],"stateMutability":"payable"}]'></textarea></label>
+      </div>
+      <div class="mintbox" id="taskNftHint" style="display:none"></div>
+      <div class="grid" id="paramsRow" style="margin-top:12px">
+        <label class="fld" style="grid-column:1/3">Parameters<input id="tParams" placeholder="param1;param2  ({address}=wallet)" /></label>
+        <label class="fld">Value<input id="tValue" value="0" /></label>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <label class="fld" style="grid-column:1/3">Wallets<div class="wsel" id="taskWsel"></div></label>
+        <label class="fld" style="grid-column:3/5">RPC Endpoints<div class="wsel" id="taskRsel"></div></label>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <label class="fld">Concurrency<input id="tConc" value="10" /></label>
+        <label class="fld">Multi-RPC<select id="tMulti"><option value="false">no</option><option value="true">yes</option></select></label>
+        <label class="fld">Proxy Group <span class="muted" style="text-transform:none">— OpenSea poll</span><select id="tProxyGroup"><option value="">none</option></select></label>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <label class="fld">Gas Mode<select id="tGasMode"><option value="auto">auto</option><option value="manual">manual</option></select></label>
+        <label class="fld">Gas Limit<input id="tGasLimit" placeholder="auto" /></label>
+        <label class="fld">Max Fee (gwei)<input id="tMaxFee" placeholder="auto" /></label>
+        <label class="fld">Priority Fee (gwei)<input id="tPrio" placeholder="auto" /></label>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <label class="fld">Nonce<input id="tNonce" placeholder="auto" /></label>
+        <label class="fld">Delay (ms)<input id="tDelay" value="0" /></label>
+        <label class="fld">Group<input id="tGroup" value="Imported" /></label>
+        <label class="fld" style="justify-content:flex-end"><span style="text-transform:none" title="ETH mainnet: send via Flashbots private bundle (anti-frontrun)"><input type="checkbox" id="tFlashbots" /> Flashbots</span></label>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <label class="fld" style="grid-column:1/2">Start Time (unix)<input id="tStartAt" oninput="updateStartHint()" placeholder="0 = now" /></label>
+        <label class="fld" style="grid-column:2/3;align-self:flex-end"><button type="button" class="sm" style="width:100%;padding:9px" onclick="setStartNow()">Now</button></label>
+        <label class="fld" style="grid-column:3/5;align-self:flex-end"><span id="tStartHint" class="muted" style="text-transform:none">fires immediately</span></label>
+      </div>
+      <div class="grid" id="postActionRow" style="margin-top:12px;display:none">
+        <label class="fld">After mint<select id="tPostAction" onchange="onPostActionChange()">
+          <option value="none">none</option>
+          <option value="transfer">Transfer NFT</option>
+          <option value="list">List NFT</option>
+          <option value="accept">Accept Offer</option>
+          <option value="drain">Drain ETH</option>
+        </select></label>
+        <label class="fld" id="postDestFld" style="grid-column:2/4">Destination<input id="tPostDest" placeholder="0x… wallet address" /></label>
+        <label class="fld" style="justify-content:flex-end"><span style="text-transform:none"><input type="checkbox" id="tPostDrain" /> Drain ETH after</span></label>
+      </div>
+      <div class="toggles" style="margin-top:18px">
+        <div class="tg on" id="tgSimulate" onclick="pickMode('simulate')" title="eth_call first, then send only if it would succeed (error if it would revert)"><div class="sw"></div> Simulate</div>
+        <div class="tg" id="tgSpam" onclick="pickMode('spam')" title="repeat the send continuously until stopped"><div class="sw"></div> Spam</div>
+        <div class="tg" id="tgAction" onclick="pickMode('action')" title="send straight away, no pre-check"><div class="sw"></div> Action</div>
+      </div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('taskModal')">Cancel</button>
+      <button class="primary" id="taskSubmitBtn" onclick="createTask()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Wallets modal ===== -->
+<div class="overlay" id="genModal">
+  <div class="modal" style="width:440px">
+    <div class="mhead"><h3>Generate Wallets</h3><span class="close" onclick="closeModal('genModal')">&times;</span></div>
+    <div class="mbody">
+      <div class="grid">
+        <label class="fld">Count<input id="genCount" type="number" value="5" min="1" max="1000" /></label>
+        <label class="fld">Group<input id="genGroup" value="main" /></label>
+      </div>
+      <div class="muted" style="margin-top:10px;font-size:11px;text-transform:none">Creates brand-new random wallets. Private keys are encrypted at rest.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('genModal')">Cancel</button>
+      <button class="primary" onclick="genWallets()">Generate</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Import Wallets modal ===== -->
+<div class="overlay" id="impModal">
+  <div class="modal" style="width:500px">
+    <div class="mhead"><h3>Import Wallets</h3><span class="close" onclick="closeModal('impModal')">&times;</span></div>
+    <div class="mbody">
+      <label class="fld">Group<input id="impGroup" value="main" /></label>
+      <label class="fld" style="margin-top:12px">Private keys (comma or newline separated)<textarea id="impKeys" rows="4" placeholder="0xabc…&#10;0xdef…"></textarea></label>
+      <div class="muted" style="margin-top:10px;font-size:11px;text-transform:none">Existing keys you already control. Stored encrypted at rest.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('impModal')">Cancel</button>
+      <button class="primary" onclick="importWallets()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Manage Funds modal ===== -->
+<div class="overlay" id="fundsModal">
+  <div class="modal" style="width:560px">
+    <div class="mhead"><h3>Manage Funds</h3><span class="close" onclick="closeModal('fundsModal')">&times;</span></div>
+    <div class="mbody">
+      <label class="fld">ERC-20 Contract Address (optional)<input id="fToken" placeholder="Leave blank for native token" /></label>
+      <div class="modegrid" style="margin-top:14px">
+        <div class="modecard active" id="mDisperse" onclick="pickFundMode('disperse')"><div class="mc-t">DISPERSE</div><div class="mc-s">One to many</div></div>
+        <div class="modecard" id="mConsolidate" onclick="pickFundMode('consolidate')"><div class="mc-t">CONSOLIDATE</div><div class="mc-s">Many to one</div></div>
+      </div>
+      <div class="grid" style="margin-top:14px">
+        <label class="fld">Source (group/addr)<input id="fSource" placeholder="funder group" /></label>
+        <label class="fld">Destinations (group)<input id="fDest" placeholder="main" /></label>
+      </div>
+      <label class="fld" style="margin-top:12px">Amount per wallet (ETH)<input id="fAmount" placeholder="0.00" /></label>
+      <div class="warnbox">Disperse / Consolidate will be enabled in Phase 5 (on-chain transfers). The UI is ready.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('fundsModal')">Cancel</button>
+      <button class="primary" onclick="doDisperse()">Disperse</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Send Funds modal (single wallet, native) ===== -->
+<div class="overlay" id="walSendModal">
+  <div class="modal" style="width:480px">
+    <div class="mhead"><h3>Send Funds</h3><span class="close" onclick="closeModal('walSendModal')">&times;</span></div>
+    <div class="mbody">
+      <div class="muted" id="walSendFrom" style="margin:-4px 0 10px"></div>
+      <label class="fld">Chain<select id="walSendChain"></select></label>
+      <label class="fld" style="margin-top:12px">Recipient<input id="walSendTo" placeholder="0x..." /></label>
+      <div class="row" style="margin-top:12px;justify-content:space-between;align-items:flex-end">
+        <label class="fld" style="flex:1">Amount (ETH)<input id="walSendAmt" placeholder="0.0" /></label>
+        <label class="row" style="margin:0 0 4px 12px;gap:6px;white-space:nowrap"><input type="checkbox" id="walSendMax" onchange="onSendMaxToggle()" /> Send max</label>
+      </div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('walSendModal')">Cancel</button>
+      <button class="primary" id="walSendBtn" onclick="doSendFunds()">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Add RPC modal ===== -->
+<div class="overlay" id="rpcModal">
+  <div class="modal" style="width:520px">
+    <div class="mhead"><h3>Add RPC</h3><span class="close" onclick="closeModal('rpcModal')">&times;</span></div>
+    <div class="mbody">
+      <div class="grid">
+        <label class="fld">Name<input id="rpcName" placeholder="main" /></label>
+        <label class="fld">Chain<select id="rpcChain"></select></label>
+      </div>
+      <label class="fld" style="margin-top:12px">URL<input id="rpcUrl" placeholder="https://..." /></label>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('rpcModal')">Cancel</button>
+      <button class="primary" onclick="addRPC()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Add Proxies modal ===== -->
+<div class="overlay" id="proxyModal">
+  <div class="modal" style="width:580px">
+    <div class="mhead"><h3>Add Proxies</h3><span class="close" onclick="closeModal('proxyModal')">&times;</span></div>
+    <div class="mbody">
+      <label class="fld">Group<input id="proxyGroupName" value="default" /></label>
+      <label class="fld" style="margin-top:12px"><span class="row" style="margin:0;justify-content:space-between">Proxies <span class="muted" id="proxyParseCount" style="text-transform:none">0 parseable lines</span></span>
+        <textarea id="proxyLines" rows="7" oninput="updateProxyCount()" placeholder="# one per line, host:port:user:pass&#10;residential.birdproxies.com:7777:pool-x:secret"></textarea></label>
+      <div class="muted" style="font-size:11px;text-transform:none;margin-top:6px">Formats: <b>host:port</b> · <b>host:port:user:pass</b> · http(s)://… · socks5://… . Used for OpenSea poll/snipe; mint sends go direct IP.</div>
+    </div>
+    <div class="mfoot">
+      <button onclick="closeModal('proxyModal')">Cancel</button>
+      <button class="primary" id="proxyAddBtn" onclick="addProxies()">Add</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

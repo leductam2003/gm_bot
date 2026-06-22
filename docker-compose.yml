@@ -1,0 +1,15 @@
+# Minimal VPS deploy. Put Caddy/Nginx in front for TLS + HTTP Basic Auth.
+services:
+  zyper-bot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"   # bind to localhost; expose via reverse proxy only
+    volumes:
+      - zyper-data:/data
+    environment:
+      ZYPER_ADDR: 0.0.0.0:8787
+      ZYPER_DB: /data/zyperbot.db
+
+volumes:
+  zyper-data:
