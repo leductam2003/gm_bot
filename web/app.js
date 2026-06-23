@@ -778,7 +778,7 @@ async function resolveTaskLink(){
         </div>
         <div class="muted" id="tPhaseStart" style="margin-top:9px;text-transform:none"></div>`;
       onPhaseChange();   // fill price + Start Time from the first phase
-      pickMode("action");
+      // Keep the current mode (Simulate by default) — don't force Action on link paste.
     } else {
       SEADROP_ON=false; PHASES=[]; if(fn) fn.style.display=""; if(pr) pr.style.display="";
       hint.style.display="none"; hint.innerHTML="";
@@ -829,7 +829,7 @@ async function openTaskEdit(id){
     if($("tQty")) $("tQty").value=cfg.quantity||1;
     if($("tMintPrice")&&cfg.mintPriceWei) $("tMintPrice").value=weiToEthStr(cfg.mintPriceWei);
     if($("tStartAt")&&cfg.startAt){ $("tStartAt").value=cfg.startAt; updateStartHint(); }   // keep saved time over phase default
-    pickMode(cfg.mode||"action");
+    pickMode(cfg.mode||"simulate");
   }
   $("taskModalTitle").textContent="Edit Task"; $("taskSubmitBtn").textContent="Save"; openModal("taskModal");
 }
