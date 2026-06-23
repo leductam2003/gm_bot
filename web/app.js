@@ -1036,8 +1036,10 @@ function nftRender(){
   if(NFT_VIEW==="list"){
     g.innerHTML=NFT_ITEMS.map(it=>{
       const k=nftKey(it), sel=NFT_SEL.has(k);
+      const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
       return `<div class="nft-row ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
         <span class="nr-check">${sel?'✓':''}</span>
+        <span class="nr-thumb" ${img}></span>
         <span class="nr-name">${it.name||('#'+it.tokenId)} <span class="muted">#${it.tokenId}</span></span>
         <span class="nr-owner mono">${short(it.owner)}</span>
         <span class="nr-stat">${it.listed?'<span class="badge listed">LISTED</span>':''}</span>
