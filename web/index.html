@@ -327,17 +327,25 @@
             <label class="fld" style="flex:2;min-width:240px">Contract Address<input id="nftContract" placeholder="0x..." /></label>
             <label class="fld" style="min-width:150px">Chain<select id="nftChain"></select></label>
             <label class="fld" style="flex:1;min-width:180px">Wallets<div class="wsel" id="nftWsel"></div></label>
-            <button class="icon" title="Load NFTs" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
-            <button class="sm" onclick="nftToggleMint()">Mint Drop</button>
+            <button class="primary sm" onclick="nftLoad()">Load NFTs</button>
           </div>
-          <div id="nftDrop"></div>
         </div>
         <div class="card" id="nftManagerCard" style="display:none">
           <div class="panel-head">
-            <div class="title"><span id="nftCount">0 NFTs</span> <span class="sub" id="nftWalletInfo"></span></div>
-            <div class="toolbtns"><button class="icon" title="Reload" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></div>
+            <div class="title"><span id="nftCount">0 NFTs</span> <span class="sub" id="nftWalletInfo"></span> <span class="sub" id="nftFloor"></span></div>
+            <div class="toolbtns">
+              <button class="sm" id="nftViewBtn" onclick="nftToggleView()">List view</button>
+              <button class="sm" onclick="nftFetchFloor()">Floor price</button>
+              <button class="icon" title="Reload" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            </div>
           </div>
-          <div class="nft-grid" id="nftGrid"></div>
+          <div class="nft-selbar">
+            <button class="sm" onclick="nftSelectAll()">Select all</button>
+            <input id="nftSelNum" class="nselnum" placeholder="N" />
+            <button class="sm" onclick="nftSelectN()">Select N</button>
+            <span class="muted" style="cursor:pointer;margin-left:auto" onclick="nftClearSel()">Clear</span>
+          </div>
+          <div class="nft-grid cardview" id="nftGrid"></div>
           <div class="actbar" id="nftActbar" style="display:none">
             <div class="left"><span id="nftSelInfo">0 selected</span> &middot; <span class="muted" style="cursor:pointer" onclick="nftClearSel()">Clear</span></div>
             <div class="right">
@@ -359,7 +367,7 @@
     <div class="mhead"><h3>List Selected on OpenSea</h3><span class="close" onclick="closeModal('listModal')">&times;</span></div>
     <div class="mbody">
       <div class="grid">
-        <label class="fld">Price (ETH)<input id="listPrice" placeholder="0.05" /></label>
+        <label class="fld">Price (ETH)<div class="row" style="gap:6px;align-items:center"><input id="listPrice" placeholder="0.05" style="flex:1" /><button class="sm" type="button" onclick="nftUseFloor()">Floor</button></div></label>
         <label class="fld">Duration (days)<input id="listDuration" value="30" /></label>
       </div>
       <div class="muted" id="listSummary" style="margin-top:10px"></div>

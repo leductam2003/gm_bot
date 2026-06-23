@@ -971,7 +971,7 @@ async function createTask(){
 }
 
 // ---------- NFT manager (OpenSea) ----------
-let NFT_ITEMS = [], NFT_SEL = new Set();
+let NFT_ITEMS = [], NFT_SEL = new Set(), NFT_VIEW = "card", NFT_SLUG = "", NFT_FLOOR = null;
 const nftKey = (it) => it.walletId + ":" + it.tokenId;
 const ethToWei = (s) => { s = String(s || "").trim(); if (!s) return "0"; const [i, f = ""] = s.split("."); const frac = (f + "0".repeat(18)).slice(0, 18); try { return (BigInt(i || "0") * (10n ** 18n) + BigInt(frac || "0")).toString(); } catch { return "0"; } };
 
@@ -981,30 +981,62 @@ async function nftLoad(){
   const ids = nftWS ? nftWS.selected() : [];
   $("nftManagerCard").style.display="block";
   $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">Loading NFTs from OpenSea…</div>`;
+  NFT_FLOOR=null; $("nftFloor").textContent="";
   try{
     const r=await api("/nft/items",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,walletIds:ids})});
-    NFT_ITEMS=r.items||[]; NFT_SEL.clear();
-    $("nftWalletInfo").textContent=`· ${r.wallets||0} wallet(s)`;
+    NFT_ITEMS=r.items||[]; NFT_SEL.clear(); NFT_SLUG=r.slug||"";
+    $("nftWalletInfo").textContent=`· ${r.wallets||0} wallet(s)`+(r.failed?` · ${r.failed} failed`:"");
     nftRender();
     if(!NFT_ITEMS.length) toast("No NFTs found for the selected wallet(s)","info");
+    else if(r.failed) toast(`${r.failed} wallet(s) were rate-limited — reload to fetch the rest`,"info");
   }catch(e){ $("nftGrid").innerHTML=`<div class="warnbox">${e.message}</div>`; }
 }
+function nftToggleView(){ NFT_VIEW = NFT_VIEW==="card"?"list":"card"; $("nftViewBtn").textContent = NFT_VIEW==="card"?"List view":"Card view"; nftRender(); }
 function nftRender(){
   $("nftCount").textContent=`${NFT_ITEMS.length} NFTs`;
-  $("nftGrid").innerHTML=NFT_ITEMS.map(it=>{
-    const k=nftKey(it), sel=NFT_SEL.has(k);
-    const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
-    return `<div class="nft-cell ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
-      <div class="nft-img" ${img}></div>
-      <div class="nft-body">
-        <div class="nft-name"><span class="nm">${it.name||('#'+it.tokenId)}</span><span class="id">#${it.tokenId}</span></div>
-        <div class="nft-foot"><span class="vault">${short(it.owner)}</span>${it.listed?'<span class="badge listed">LISTED</span>':''}</div>
-      </div></div>`;
-  }).join("") || `<div class="muted" style="padding:20px">No NFTs found.</div>`;
+  const g=$("nftGrid");
+  g.classList.toggle("cardview", NFT_VIEW==="card");
+  g.classList.toggle("listview", NFT_VIEW==="list");
+  if(!NFT_ITEMS.length){ g.innerHTML=`<div class="muted" style="padding:20px">No NFTs found.</div>`; nftUpdateBar(); return; }
+  if(NFT_VIEW==="list"){
+    g.innerHTML=NFT_ITEMS.map(it=>{
+      const k=nftKey(it), sel=NFT_SEL.has(k);
+      return `<div class="nft-row ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
+        <span class="nr-check">${sel?'✓':''}</span>
+        <span class="nr-name">${it.name||('#'+it.tokenId)} <span class="muted">#${it.tokenId}</span></span>
+        <span class="nr-owner mono">${short(it.owner)}</span>
+        <span class="nr-stat">${it.listed?'<span class="badge listed">LISTED</span>':''}</span>
+      </div>`;
+    }).join("");
+  } else {
+    g.innerHTML=NFT_ITEMS.map(it=>{
+      const k=nftKey(it), sel=NFT_SEL.has(k);
+      const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
+      return `<div class="nft-cell ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
+        <div class="nft-img" ${img}></div>
+        <div class="nft-body">
+          <div class="nft-name"><span class="nm">${it.name||('#'+it.tokenId)}</span><span class="id">#${it.tokenId}</span></div>
+          <div class="nft-foot"><span class="vault">${short(it.owner)}</span>${it.listed?'<span class="badge listed">LISTED</span>':''}</div>
+        </div></div>`;
+    }).join("");
+  }
   nftUpdateBar();
 }
 function nftToggle(k){ NFT_SEL.has(k)?NFT_SEL.delete(k):NFT_SEL.add(k); nftRender(); }
 function nftClearSel(){ NFT_SEL.clear(); nftRender(); }
+function nftSelectAll(){ NFT_ITEMS.forEach(it=>NFT_SEL.add(nftKey(it))); nftRender(); }
+function nftSelectN(){ const n=Math.max(0,Math.floor(Number($("nftSelNum").value)||0)); NFT_SEL.clear(); NFT_ITEMS.slice(0,n).forEach(it=>NFT_SEL.add(nftKey(it))); nftRender(); if(n>NFT_ITEMS.length) toast(`Only ${NFT_ITEMS.length} NFTs loaded`,"info"); }
+async function nftFetchFloor(){
+  const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
+  if(!contract) return toast("Enter a contract address","info");
+  $("nftFloor").textContent="· floor …";
+  try{
+    const r=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
+    NFT_FLOOR=Number(r.floor)||0; if(r.slug) NFT_SLUG=r.slug;
+    $("nftFloor").textContent = NFT_FLOOR ? `· floor ${NFT_FLOOR} ETH` : "· no floor listed";
+  }catch(e){ $("nftFloor").textContent=""; toast(e.message,"error"); }
+}
+async function nftUseFloor(){ if(NFT_FLOOR==null) await nftFetchFloor(); if(NFT_FLOOR) $("listPrice").value=String(NFT_FLOOR); else toast("No floor price available","info"); }
 function nftSelected(){ return NFT_ITEMS.filter(it=>NFT_SEL.has(nftKey(it))); }
 function nftUpdateBar(){
   const sel=nftSelected(); const wallets=new Set(sel.map(it=>it.walletId)).size; const listed=sel.filter(it=>it.listed).length;
@@ -1049,8 +1081,8 @@ async function nftCancel(){
     toast(`Cancelled ${r.cancelled||0}/${sel.length}`, "success"); setTimeout(nftLoad,1500);
   }catch(e){ toast(e.message,"error"); }
 }
-// SeaDrop mint (secondary)
-function nftToggleMint(){ const d=$("nftDrop"); if(d.innerHTML.trim()){ d.innerHTML=""; } else { nftResolve(); } }
+// SeaDrop mint via the NFT tab was removed — create mint tasks from the Tasks tab
+// (paste an OpenSea link) instead. nftResolve/nftCreateMint kept as internal helpers.
 async function nftResolve(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   if(!contract) return toast("Enter a contract address","error");

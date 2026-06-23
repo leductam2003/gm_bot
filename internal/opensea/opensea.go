@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -45,9 +46,11 @@ func (c *Client) post(ctx context.Context, path string, payload any) ([]byte, in
 // another. Other 4xx/5xx are returned as-is.
 func (c *Client) doRotating(ctx context.Context, method, path string, body []byte, ctype string) ([]byte, int, error) {
 	keys := config.OpenSeaKeys()
-	attempts := len(keys)
-	if attempts == 0 {
-		attempts = 1
+	// Retry across keys AND with backoff: on a 429 we wait (honoring Retry-After) and
+	// try again, so even a single throttled key recovers instead of failing the call.
+	attempts := 7
+	if len(keys) > attempts {
+		attempts = len(keys)
 	}
 	var lastBody []byte
 	var lastStatus int
@@ -71,13 +74,23 @@ func (c *Client) doRotating(ctx context.Context, method, path string, body []byt
 		resp, err := c.hc.Do(req)
 		if err != nil {
 			lastErr = err
+			if !sleepCtx(ctx, backoffDur(i)) {
+				return lastBody, lastStatus, ctx.Err()
+			}
 			continue
 		}
 		rb, _ := io.ReadAll(resp.Body)
+		wait := retryAfterDur(resp)
 		resp.Body.Close()
 		if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 {
 			lastBody, lastStatus, lastErr = rb, resp.StatusCode, fmt.Errorf("opensea %d: %s", resp.StatusCode, snip(rb))
-			continue // throttled/bad key — rotate to the next
+			if wait <= 0 {
+				wait = backoffDur(i)
+			}
+			if !sleepCtx(ctx, wait) { // throttled/bad key — wait, then rotate + retry
+				return lastBody, lastStatus, ctx.Err()
+			}
+			continue
 		}
 		if resp.StatusCode >= 400 {
 			return rb, resp.StatusCode, fmt.Errorf("opensea %d: %s", resp.StatusCode, snip(rb))
@@ -85,6 +98,43 @@ func (c *Client) doRotating(ctx context.Context, method, path string, body []byt
 		return rb, resp.StatusCode, nil
 	}
 	return lastBody, lastStatus, lastErr
+}
+
+// retryAfterDur reads the Retry-After header (seconds), capped at 10s; 0 if absent.
+func retryAfterDur(resp *http.Response) time.Duration {
+	if v := strings.TrimSpace(resp.Header.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			if secs > 10 {
+				secs = 10
+			}
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 0
+}
+
+// backoffDur is exponential backoff (0.4s, 0.8s, 1.6s…) capped at 4s.
+func backoffDur(attempt int) time.Duration {
+	d := 400 * time.Millisecond * time.Duration(1<<uint(attempt))
+	if d > 4*time.Second {
+		d = 4 * time.Second
+	}
+	return d
+}
+
+// sleepCtx waits d (or returns false if ctx is cancelled first).
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func snip(b []byte) string {
@@ -124,6 +174,23 @@ func (c *Client) CollectionFees(ctx context.Context, slug string) ([]Fee, error)
 		}
 	}
 	return out, nil
+}
+
+// Floor returns the collection's current floor price (in ETH; 0 if unlisted/unknown).
+func (c *Client) Floor(ctx context.Context, slug string) (float64, error) {
+	body, _, err := c.get(ctx, "/collections/"+slug+"/stats")
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		Total struct {
+			FloorPrice float64 `json:"floor_price"`
+		} `json:"total"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return 0, err
+	}
+	return r.Total.FloorPrice, nil
 }
 
 // PostListing submits a signed Seaport listing to OpenSea.

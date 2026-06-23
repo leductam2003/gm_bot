@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -256,17 +257,17 @@ func personalSign(key *ecdsa.PrivateKey, msg string) (string, error) {
 }
 
 func siweNonce(ctx context.Context, hc *http.Client) (string, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://opensea.io/__api/auth/siwe/nonce", strings.NewReader("{}"))
-	wlBrowserHeaders(req)
-	req.Header.Set("content-type", "application/json")
-	resp, err := hc.Do(req)
+	b, status, err := wlDo(ctx, hc, func() (*http.Request, error) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://opensea.io/__api/auth/siwe/nonce", strings.NewReader("{}"))
+		wlBrowserHeaders(req)
+		req.Header.Set("content-type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("%d: %s", resp.StatusCode, snipB(b))
+	if status >= 400 {
+		return "", fmt.Errorf("%d: %s", status, snipB(b))
 	}
 	var j struct {
 		Nonce string `json:"nonce"`
@@ -283,19 +284,92 @@ func siweNonce(ctx context.Context, hc *http.Client) (string, error) {
 
 func siweVerify(ctx context.Context, hc *http.Client, msgObj map[string]any, sig string) error {
 	payload, _ := json.Marshal(map[string]any{"chainArch": "EVM", "connectorId": "io.metamask", "message": msgObj, "signature": sig})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://opensea.io/__api/auth/siwe/verify", bytes.NewReader(payload))
-	wlBrowserHeaders(req)
-	req.Header.Set("content-type", "application/json")
-	resp, err := hc.Do(req)
+	b, status, err := wlDo(ctx, hc, func() (*http.Request, error) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://opensea.io/__api/auth/siwe/verify", bytes.NewReader(payload))
+		wlBrowserHeaders(req)
+		req.Header.Set("content-type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%d: %s", resp.StatusCode, snipB(b))
+	if status >= 400 {
+		return fmt.Errorf("%d: %s", status, snipB(b))
 	}
 	return nil
+}
+
+// wlDo runs build() and retries on 429 / 5xx with backoff (honoring Retry-After), since
+// OpenSea throttles hard when many wallets check in. Non-retryable responses (incl. other
+// 4xx) are returned with their status; only the transport/exhaustion case sets err.
+func wlDo(ctx context.Context, hc *http.Client, build func() (*http.Request, error)) ([]byte, int, error) {
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		req, err := build()
+		if err != nil {
+			return nil, 0, err
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			lastErr = err
+			if !wlSleep(ctx, wlBackoff(attempt)) {
+				return nil, 0, ctx.Err()
+			}
+			continue
+		}
+		b, _ := io.ReadAll(resp.Body)
+		wait := wlRetryAfter(resp)
+		resp.Body.Close()
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("%d: %s", resp.StatusCode, snipB(b))
+			if wait <= 0 {
+				wait = wlBackoff(attempt)
+			}
+			if !wlSleep(ctx, wait) {
+				return nil, 0, ctx.Err()
+			}
+			continue
+		}
+		return b, resp.StatusCode, nil
+	}
+	return nil, 0, lastErr
+}
+
+func wlRetryAfter(resp *http.Response) time.Duration {
+	if v := strings.TrimSpace(resp.Header.Get("Retry-After")); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			if secs > 10 {
+				secs = 10
+			}
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 0
+}
+
+func wlBackoff(attempt int) time.Duration {
+	d := 500 * time.Millisecond * time.Duration(1<<uint(attempt))
+	if d > 5*time.Second {
+		d = 5 * time.Second
+	}
+	return d
+}
+
+func wlSleep(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func dropEligibility(ctx context.Context, hc *http.Client, slug string, addr common.Address, token string) ([]wlStage, error) {
@@ -304,13 +378,6 @@ func dropEligibility(ctx context.Context, hc *http.Client, slug string, addr com
 		"query":         dropEligibilityQuery,
 		"variables":     map[string]any{"address": strings.ToLower(addr.Hex()), "collectionSlug": slug},
 	})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://gql.opensea.io/graphql", bytes.NewReader(payload))
-	req.Header.Set("origin", "https://opensea.io")
-	req.Header.Set("referer", "https://opensea.io/")
-	req.Header.Set("user-agent", wlUA)
-	req.Header.Set("x-app-id", "os2-web")
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("accept", "application/graphql-response+json, application/json")
 	// connected-account-server-hint tells OpenSea which wallet is "active" — without it
 	// the query returns isEligible:null / ACTIVE_ADDRESS_NOT_PROVIDED (personalized
 	// eligibility needs both the access_token AND the active-address hint).
@@ -318,15 +385,22 @@ func dropEligibility(ctx context.Context, hc *http.Client, slug string, addr com
 	if token != "" {
 		cookie = "access_token=" + token + "; " + cookie
 	}
-	req.Header.Set("cookie", cookie)
-	resp, err := hc.Do(req)
+	b, status, err := wlDo(ctx, hc, func() (*http.Request, error) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://gql.opensea.io/graphql", bytes.NewReader(payload))
+		req.Header.Set("origin", "https://opensea.io")
+		req.Header.Set("referer", "https://opensea.io/")
+		req.Header.Set("user-agent", wlUA)
+		req.Header.Set("x-app-id", "os2-web")
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("accept", "application/graphql-response+json, application/json")
+		req.Header.Set("cookie", cookie)
+		return req, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("eligibility %d: %s", resp.StatusCode, snipB(b))
+	if status >= 400 {
+		return nil, fmt.Errorf("eligibility %d: %s", status, snipB(b))
 	}
 	var r struct {
 		Data struct {

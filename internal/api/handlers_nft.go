@@ -348,28 +348,87 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slug, _ := s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
-	var items []nftItem
-	for _, sw := range selected {
-		nfts, err := s.osc.AccountNFTs(r.Context(), chainSlug, sw.addr, slug, 200)
-		if err != nil {
-			s.log.API(logger.WARN, "opensea account nfts failed", map[string]any{"err": err.Error()})
-			continue
-		}
-		listed := s.osc.MakerListedTokenIDs(r.Context(), chainSlug, slug, sw.addr, body.ContractAddress)
-		for _, n := range nfts {
-			if slug == "" && !strings.EqualFold(n.Contract, body.ContractAddress) {
-				continue
+
+	// Fetch every selected wallet concurrently (bounded) so 100s of wallets complete
+	// within the request budget. The opensea client retries 429s, so a throttled wallet
+	// recovers instead of being silently dropped (the cause of "only ~100 of 400 shown").
+	perWallet := make([][]nftItem, len(selected))
+	failed := 0
+	var fmu sync.Mutex
+	sem := make(chan struct{}, 5)
+	var wg sync.WaitGroup
+	for i := range selected {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			sw := selected[i]
+			nfts, err := s.osc.AccountNFTs(r.Context(), chainSlug, sw.addr, slug, 200)
+			if err != nil {
+				s.log.API(logger.WARN, "opensea account nfts failed", map[string]any{"wallet": sw.addr, "err": err.Error()})
+				fmu.Lock()
+				failed++
+				fmu.Unlock()
+				return
 			}
-			items = append(items, nftItem{
-				WalletID: sw.id, Owner: sw.addr, TokenID: n.TokenID,
-				Name: n.Name, Image: n.Image, Listed: listed[n.TokenID],
-			})
+			listed := s.osc.MakerListedTokenIDs(r.Context(), chainSlug, slug, sw.addr, body.ContractAddress)
+			var out []nftItem
+			for _, n := range nfts {
+				if slug == "" && !strings.EqualFold(n.Contract, body.ContractAddress) {
+					continue
+				}
+				out = append(out, nftItem{
+					WalletID: sw.id, Owner: sw.addr, TokenID: n.TokenID,
+					Name: n.Name, Image: n.Image, Listed: listed[n.TokenID],
+				})
+			}
+			perWallet[i] = out
+		}(i)
+	}
+	wg.Wait()
+
+	items := []nftItem{}
+	for _, w := range perWallet {
+		items = append(items, w...)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "slug": slug, "wallets": len(selected), "failed": failed})
+}
+
+// POST /api/nft/floor {chainId, contractAddress, slug?} — collection floor price (ETH).
+func (s *Server) handleNftFloor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChainID         int    `json:"chainId"`
+		ContractAddress string `json:"contractAddress"`
+		Slug            string `json:"slug"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if !s.osc.HasKey() {
+		writeErr(w, http.StatusBadRequest, "OpenSea API key not set")
+		return
+	}
+	slug := strings.TrimSpace(body.Slug)
+	if slug == "" {
+		chainSlug, err := chains.SlugFromChainID(body.ChainID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
+			return
+		}
+		slug, _ = s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "couldn't resolve the collection")
+			return
 		}
 	}
-	if items == nil {
-		items = []nftItem{}
+	floor, err := s.osc.Floor(r.Context(), slug)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "floor: "+err.Error())
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "slug": slug, "wallets": len(selected)})
+	writeJSON(w, http.StatusOK, map[string]any{"floor": floor, "slug": slug})
 }
 
 // POST /api/nft/list {chainId, contractAddress, priceWei, durationSec, items:[{walletId,tokenId}]}
