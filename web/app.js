@@ -1063,17 +1063,76 @@ async function nftSendConfirm(){
   }
   closeModal("sendModal"); toast(`Created ${n} transfer task(s) in group 'NFT-Send'`,"success");
 }
-// List Selected → Seaport listing
-function nftList(){ const sel=nftSelected(); if(!sel.length)return; $("listSummary").textContent=`Listing ${sel.length} NFT(s) at the same price each.`; openModal("listModal"); }
-async function nftListConfirm(){
-  const priceWei=ethToWei($("listPrice").value); if(priceWei==="0") return toast("Enter a price","error");
-  const days=Number($("listDuration").value)||30;
+// List Selected → OpenSea-style Create-listings modal (per-item pricing)
+let LIST_ITEMS = [], LIST_FEE_BPS = 0;
+function nftList(){
+  const sel=nftSelected(); if(!sel.length)return;
+  LIST_ITEMS = sel.map(it=>({ walletId:it.walletId, tokenId:it.tokenId, name:it.name||('#'+it.tokenId), image:it.image||"", floor:null, price:"" }));
+  LIST_FEE_BPS=0; $("listCount").textContent=`${LIST_ITEMS.length} item(s)`; $("listSetAll").value="";
+  $("listPlatFee").textContent="—"; $("listCreatorFee").textContent="—";
+  renderListRows();
+  openModal("listModal");
+  loadListFloorFees();
+}
+async function loadListFloorFees(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
-  const items=nftSelected().map(it=>({walletId:it.walletId,tokenId:it.tokenId}));
+  try{ const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})}); NFT_FLOOR=Number(f.floor)||0; if(f.slug)NFT_SLUG=f.slug; LIST_ITEMS.forEach(it=>it.floor=NFT_FLOOR); }catch{}
+  try{ const fe=await api("/nft/fees",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
+    LIST_FEE_BPS=Number(fe.feeBps)||0;
+    $("listPlatFee").textContent=((Number(fe.platformBps)||0)/100).toFixed(1)+"%";
+    $("listCreatorFee").textContent=((Number(fe.creatorBps)||0)/100).toFixed(1)+"%";
+  }catch{}
+  renderListRows();
+}
+function renderListRows(){
+  $("listRows").innerHTML=LIST_ITEMS.map((it,i)=>{
+    const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
+    const proc=procOf(it.price);
+    return `<div class="ltr">
+      <span class="c-item"><span class="lt-thumb" ${img}></span><span>${it.name}</span></span>
+      <span class="c-qty">1</span>
+      <span class="c-floor">${it.floor!=null?it.floor:"—"}</span>
+      <span class="c-proc">${proc}</span>
+      <span class="c-price"><input class="lprice" value="${it.price}" placeholder="0.00" oninput="listPriceInput(${i},this.value)" /></span>
+    </div>`;
+  }).join("");
+  recomputeList();
+}
+const procOf=(p)=>{ const n=Number(p); return (p!==""&&!isNaN(n)&&n>0) ? Number((n*(1-LIST_FEE_BPS/10000)).toFixed(5)) : "—"; };
+function listPriceInput(i,v){
+  LIST_ITEMS[i].price=String(v).trim();
+  const row=$("listRows").children[i]; if(row){ const pc=row.querySelector(".c-proc"); if(pc) pc.textContent=procOf(LIST_ITEMS[i].price); }
+  recomputeList();
+}
+function recomputeList(){
+  let total=0; LIST_ITEMS.forEach(it=>{ const p=Number(it.price); if(!isNaN(p)&&p>0) total+=p; });
+  $("listTotal").textContent=`${Number(total.toFixed(6))} ETH`;
+  $("listProceeds").textContent=`${Number((total*(1-LIST_FEE_BPS/10000)).toFixed(6))} ETH`;
+}
+function listApplyAll(){ const v=$("listSetAll").value.trim(); if(v==="") return; LIST_ITEMS.forEach(it=>it.price=v); renderListRows(); }
+async function listSetFloor(){ if(!NFT_FLOOR) await loadListFloorFees(); if(NFT_FLOOR){ LIST_ITEMS.forEach(it=>it.price=String(NFT_FLOOR)); renderListRows(); } else toast("No floor price available","info"); }
+async function listLadder(){
+  const v=await promptDialog("Ladder pricing","from,to (ETH) e.g. 0.05,0.1"); if(!v) return;
+  const [a,b]=v.split(",").map(x=>Number(x.trim()));
+  if(isNaN(a)||isNaN(b)) return toast("Enter as: from,to","error");
+  const n=LIST_ITEMS.length;
+  LIST_ITEMS.forEach((it,i)=>{ const p = n<=1 ? a : a+(b-a)*i/(n-1); it.price=String(Number(p.toFixed(6))); });
+  renderListRows();
+}
+function listAdjustFees(){ const f=1-LIST_FEE_BPS/10000; if(f<=0) return toast("Fees not loaded yet","info");
+  LIST_ITEMS.forEach(it=>{ const p=Number(it.price); if(!isNaN(p)&&p>0) it.price=String(Number((p/f).toFixed(6))); }); renderListRows();
+  toast("Prices grossed up so proceeds ≈ the price you set","info");
+}
+async function nftListConfirm(){
+  const items=LIST_ITEMS.filter(it=>Number(it.price)>0).map(it=>({walletId:it.walletId,tokenId:it.tokenId,priceWei:ethToWei(it.price)}));
+  if(!items.length) return toast("Set a unit price first","error");
+  const days=Number($("listDuration").value)||7;
+  const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   try{
-    const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,priceWei,durationSec:days*86400,items})});
+    const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:days*86400,items})});
     closeModal("listModal");
-    toast(`Listed ${r.listed||0}/${items.length}${r.failed?` · ${r.failed} failed`:""}`, r.failed?"info":"success");
+    const extra=[r.needApproval?`${r.needApproval} need approval (run NFT-Approve)`:"", r.failed?`${r.failed} failed`:""].filter(Boolean).join(" · ");
+    toast(`Listed ${r.listed||0}/${items.length}${extra?" · "+extra:""}`, (r.failed||r.needApproval)?"info":"success");
     setTimeout(nftLoad,1500);
   }catch(e){ toast(e.message,"error"); }
 }

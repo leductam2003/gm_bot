@@ -467,18 +467,66 @@ func (s *Server) handleNftFloor(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"floor": floor, "slug": slug})
 }
 
-// POST /api/nft/list {chainId, contractAddress, priceWei, durationSec, items:[{walletId,tokenId}]}
+// openSeaFeeRecipient is OpenSea's protocol-fee address; everything else is the creator.
+const openSeaFeeRecipient = "0x0000a26b00c1f0df003000390027140000faa719"
+
+// POST /api/nft/fees {chainId, contractAddress, slug?} — enforced platform + creator fees (bps).
+func (s *Server) handleNftFees(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChainID         int    `json:"chainId"`
+		ContractAddress string `json:"contractAddress"`
+		Slug            string `json:"slug"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if !s.osc.HasKey() {
+		writeErr(w, http.StatusBadRequest, "OpenSea API key not set")
+		return
+	}
+	slug := strings.TrimSpace(body.Slug)
+	if slug == "" {
+		chainSlug, err := chains.SlugFromChainID(body.ChainID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
+			return
+		}
+		slug, _ = s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
+		if slug == "" {
+			writeErr(w, http.StatusBadRequest, "couldn't resolve the collection")
+			return
+		}
+	}
+	osFees, err := s.osc.CollectionFees(r.Context(), slug)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "fees: "+err.Error())
+		return
+	}
+	var platform, creator int64
+	for _, f := range osFees {
+		if strings.EqualFold(f.Recipient, openSeaFeeRecipient) {
+			platform += f.Bps
+		} else {
+			creator += f.Bps
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"platformBps": platform, "creatorBps": creator, "feeBps": platform + creator, "slug": slug})
+}
+
+// POST /api/nft/list {chainId, contractAddress, priceWei, durationSec, items:[{walletId,tokenId,priceWei}]}
 // Signs a Seaport listing per item (off-chain) and posts to OpenSea. Wallets missing
 // the one-time conduit approval get an approval task instead (run it, then list again).
 func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ChainID         int    `json:"chainId"`
 		ContractAddress string `json:"contractAddress"`
-		PriceWei        string `json:"priceWei"`
+		PriceWei        string `json:"priceWei"` // fallback price for items without their own
 		DurationSec     int64  `json:"durationSec"`
 		Items           []struct {
 			WalletID int64  `json:"walletId"`
 			TokenID  string `json:"tokenId"`
+			PriceWei string `json:"priceWei"` // per-item price (overrides the fallback)
 		} `json:"items"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -489,11 +537,7 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "OpenSea API key not set")
 		return
 	}
-	price, ok := new(big.Int).SetString(body.PriceWei, 10)
-	if !ok || price.Sign() <= 0 {
-		writeErr(w, http.StatusBadRequest, "invalid price")
-		return
-	}
+	fallbackPrice, _ := new(big.Int).SetString(strings.TrimSpace(body.PriceWei), 10)
 	if body.DurationSec <= 0 {
 		body.DurationSec = 30 * 86400
 	}
@@ -519,16 +563,31 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 		fees = append(fees, evm.Fee{Recipient: f.Recipient, Bps: f.Bps})
 	}
 
-	byWallet := map[int64][]string{}
-	for _, it := range body.Items {
-		byWallet[it.WalletID] = append(byWallet[it.WalletID], it.TokenID)
+	type listItem struct {
+		tokenID string
+		price   *big.Int
 	}
-	listed, failed, needApproval := 0, 0, 0
+	byWallet := map[int64][]listItem{}
+	failedPrice := 0
+	for _, it := range body.Items {
+		p := fallbackPrice
+		if pw := strings.TrimSpace(it.PriceWei); pw != "" {
+			if v, ok := new(big.Int).SetString(pw, 10); ok {
+				p = v
+			}
+		}
+		if p == nil || p.Sign() <= 0 {
+			failedPrice++ // no valid price for this item
+			continue
+		}
+		byWallet[it.WalletID] = append(byWallet[it.WalletID], listItem{it.TokenID, p})
+	}
+	listed, failed, needApproval := 0, failedPrice, 0
 	var approveTasks []int64
-	for walletID, tokenIDs := range byWallet {
+	for walletID, litems := range byWallet {
 		key, owner, err := s.walletKey(walletID)
 		if err != nil {
-			failed += len(tokenIDs)
+			failed += len(litems)
 			continue
 		}
 		approved, _ := evm.IsApprovedForConduit(r.Context(), client, contract, owner)
@@ -541,23 +600,23 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 			if id != 0 {
 				approveTasks = append(approveTasks, id)
 			}
-			needApproval += len(tokenIDs)
+			needApproval += len(litems)
 			wipeECDSA(key)
 			continue
 		}
 		counter, cerr := evm.SeaportCounter(r.Context(), client, owner)
 		if cerr != nil {
-			failed += len(tokenIDs)
+			failed += len(litems)
 			wipeECDSA(key)
 			continue
 		}
-		for _, tid := range tokenIDs {
-			tokenID, ok := new(big.Int).SetString(tid, 10)
+		for _, li := range litems {
+			tokenID, ok := new(big.Int).SetString(li.tokenID, 10)
 			if !ok {
 				failed++
 				continue
 			}
-			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, price, fees, body.DurationSec, time.Now().Unix(), randSalt())
+			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt())
 			if berr != nil {
 				failed++
 				continue

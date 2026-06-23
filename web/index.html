@@ -366,19 +366,33 @@
 
 <!-- ===== List Selected modal ===== -->
 <div class="overlay" id="listModal">
-  <div class="modal" style="width:460px">
-    <div class="mhead"><h3>List Selected on OpenSea</h3><span class="close" onclick="closeModal('listModal')">&times;</span></div>
+  <div class="modal listmodal" style="width:780px;max-width:94vw">
+    <div class="mhead"><div><h3>Create listings</h3><div class="muted" id="listCount">0 items</div></div><span class="close" onclick="closeModal('listModal')">&times;</span></div>
     <div class="mbody">
-      <div class="grid">
-        <label class="fld">Price (ETH)<div class="row" style="gap:6px;align-items:center"><input id="listPrice" placeholder="0.05" style="flex:1" /><button class="sm" type="button" onclick="nftUseFloor()">Floor</button></div></label>
-        <label class="fld">Duration (days)<input id="listDuration" value="30" /></label>
+      <div class="list-toolbar">
+        <span class="muted">Set all to</span>
+        <span class="setall-in"><input id="listSetAll" placeholder="0.00" /><span>ETH</span></span>
+        <button class="sm" onclick="listApplyAll()">Apply</button>
+        <button class="sm" onclick="listSetFloor()">Floor</button>
+        <button class="sm" onclick="listLadder()">Ladder</button>
+        <button class="sm" onclick="listAdjustFees()">Adjust for fees</button>
       </div>
-      <div class="muted" id="listSummary" style="margin-top:10px"></div>
-      <div class="warnbox">Listing signs a Seaport order off-chain (no gas). The first listing per collection needs a one-time on-chain approval (gas). Vault must be unlocked.</div>
+      <div class="ltbl">
+        <div class="ltbl-head"><span class="c-item">ITEM</span><span class="c-qty">QTY</span><span class="c-floor">FLOOR</span><span class="c-proc">PROCEEDS</span><span class="c-price">UNIT PRICE</span></div>
+        <div class="ltbl-rows" id="listRows"></div>
+      </div>
+      <div class="warnbox" style="margin-top:10px">Signs a Seaport order off-chain (no gas). The first listing per wallet needs a one-time on-chain approval — an approval task is created automatically; run it then list again.</div>
+    </div>
+    <div class="list-foot">
+      <div class="lf"><span>Total listing price</span><b id="listTotal">0 ETH</b></div>
+      <div class="lf muted"><span>Platform fee<span class="enf">ENFORCED</span></span><span id="listPlatFee">—</span></div>
+      <div class="lf muted"><span>Creator fee<span class="enf">ENFORCED</span></span><span id="listCreatorFee">—</span></div>
+      <div class="lf"><span>Total est. proceeds</span><b id="listProceeds">0 ETH</b></div>
     </div>
     <div class="mfoot">
-      <button onclick="closeModal('listModal')">Cancel</button>
-      <button class="primary" onclick="nftListConfirm()">List</button>
+      <span class="muted" style="margin-right:auto">Expiration <select id="listDuration"><option value="1">1 Day</option><option value="7" selected>7 Days</option><option value="30">30 Days</option><option value="90">90 Days</option></select></span>
+      <button onclick="closeModal('listModal')">Close</button>
+      <button class="primary" onclick="nftListConfirm()">Create Listings</button>
     </div>
   </div>
 </div>

@@ -108,6 +108,7 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/nft/resolve-link", s.handleNftResolveLink)
 		r.Post("/nft/items", s.handleNftItems)
 		r.Post("/nft/floor", s.handleNftFloor)
+		r.Post("/nft/fees", s.handleNftFees)
 		r.Post("/nft/list", s.handleNftList)
 		r.Post("/nft/cancel", s.handleNftCancel)
 

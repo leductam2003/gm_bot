@@ -327,7 +327,28 @@ input[type=checkbox] { accent-color: oklch(0.84 0.11 350); }
 
 /* ---------- nft manager grid ---------- */
 .nft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 14px; margin-top: 14px; }
-.nft-grid.cardview { max-height: 560px; overflow-y: auto; padding-right: 4px; } /* ~3 rows then scroll */
+.nft-grid.cardview { max-height: 640px; overflow-y: auto; padding-right: 4px; } /* ~3 rows then scroll */
+/* Create-listings modal */
+.list-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; }
+.setall-in { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 8px; padding: 0 8px; }
+.setall-in input { width: 78px; border: none; background: transparent; padding: 7px 0; color: var(--text); }
+.setall-in span { color: var(--muted); font-size: 11px; }
+.ltbl { border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
+.ltbl-head, .ltr { display: grid; grid-template-columns: 1fr 46px 64px 84px 110px; align-items: center; gap: 8px; padding: 9px 12px; }
+.ltbl-head { color: var(--muted); font-size: 10.5px; letter-spacing: .5px; border-bottom: 1px solid var(--line2); }
+.ltbl-rows { max-height: 300px; overflow-y: auto; }
+.ltr { border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.ltr:last-child { border-bottom: none; }
+.ltr .c-item { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.ltr .c-item > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-thumb { width: 30px; height: 30px; border-radius: 6px; background: #11191b center/cover no-repeat; flex-shrink: 0; }
+.c-qty, .c-floor, .c-proc { color: var(--muted2); text-align: center; }
+.lprice { width: 100%; padding: 6px 9px; text-align: right; font-family: var(--mono); }
+.list-foot { padding: 12px 20px; border-top: 1px solid var(--line); }
+.list-foot .lf { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+.list-foot .lf.muted { color: var(--muted); font-size: 12px; }
+.list-foot .lf b { color: var(--text); }
+.enf { font-size: 9px; background: var(--line2); padding: 1px 5px; border-radius: 4px; color: var(--muted2); letter-spacing: .5px; margin-left: 4px; }
 .nft-grid.listview { display: block; max-height: 440px; overflow-y: auto; padding-right: 4px; } /* ~10 rows then scroll */
 .nft-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 13px; }
 .nft-row:hover { background: rgba(255,255,255,.02); }
