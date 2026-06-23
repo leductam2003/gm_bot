@@ -279,8 +279,8 @@ func (s *Service) handle(ctx context.Context, u tgUpdate) {
 		return
 	}
 
-	// A pasted OpenSea collection link or contract address opens the task-config panel.
-	if looksLikeNftLink(text) {
+	// A pasted OpenSea / explorer link, contract address, or tx hash opens the task panel.
+	if looksLikeTaskInput(text) {
 		s.startTaskDraft(ctx, chatID, text)
 		return
 	}

@@ -16,6 +16,7 @@ import (
 	"zyperbot/internal/logger"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"zyperbot/internal/chains"
@@ -23,7 +24,7 @@ import (
 	"zyperbot/internal/evm"
 )
 
-// draft is the in-progress task config for one chat (built from a pasted link).
+// draft is the in-progress task config for one chat (built from a pasted link/hash).
 type draft struct {
 	chainID      int
 	contract     string
@@ -31,6 +32,9 @@ type draft struct {
 	seadrop      bool
 	priceWei     string
 	maxPerWallet int
+	hexMode      bool   // replay: send rawHex calldata + value as-is
+	rawHex       string // calldata copied from a replayed tx
+	valueWei     string // value copied from a replayed tx
 	mode         string // "simulate" | "action"
 	group        string // wallet group; "" = all wallets
 	quantity     int
@@ -219,6 +223,16 @@ func (s *Service) configText(d *draft) string {
 	if name == "" {
 		name = short(d.contract)
 	}
+	if d.hexMode {
+		val := "0"
+		if pw, ok := new(big.Int).SetString(d.valueWei, 10); ok {
+			val = weiToEth(pw)
+		}
+		txt := fmt.Sprintf("⚙️ New Task — Replay Tx\n\n%s\nChain: %d\nContract: %s\nMode: %s\nWallets: %s\nValue: %s ETH\nCalldata: %s",
+			name, d.chainID, short(d.contract), d.mode, groupLabel(d.group), val, shortHex(d.rawHex))
+		txt += "\n\n⚠ Re-sends the raw calldata as-is. If the tx hard-codes a recipient/minter, it may not go to your wallet."
+		return txt
+	}
 	kind := "Contract"
 	if d.seadrop {
 		kind = "SeaDrop"
@@ -236,14 +250,26 @@ func (s *Service) configText(d *draft) string {
 	return txt
 }
 
+func shortHex(h string) string {
+	if len(h) <= 22 {
+		return h
+	}
+	return h[:12] + "…" + h[len(h)-6:]
+}
+
 func (s *Service) configRows(d *draft) [][]ikButton {
-	return [][]ikButton{
+	rows := [][]ikButton{
 		{{Text: "Mode: " + d.mode, Data: "cfg:mode"}},
 		{{Text: "Wallets: " + groupLabel(d.group), Data: "cfg:grp"}},
-		{{Text: "− qty", Data: "cfg:q-"}, {Text: fmt.Sprintf("Qty: %d", d.quantity), Data: "cfg:noop"}, {Text: "+ qty", Data: "cfg:q+"}},
-		{{Text: "✅ Create Task", Data: "cfg:create"}},
-		{{Text: "✖ Cancel", Data: "cfg:cancel"}},
 	}
+	if !d.hexMode { // quantity applies to mints, not a raw replay
+		rows = append(rows, []ikButton{{Text: "− qty", Data: "cfg:q-"}, {Text: fmt.Sprintf("Qty: %d", d.quantity), Data: "cfg:noop"}, {Text: "+ qty", Data: "cfg:q+"}})
+	}
+	rows = append(rows,
+		[]ikButton{{Text: "✅ Create Task", Data: "cfg:create"}},
+		[]ikButton{{Text: "✖ Cancel", Data: "cfg:cancel"}},
+	)
+	return rows
 }
 
 func (s *Service) renderConfig(ctx context.Context, chatID, msgID int64, d *draft) {
@@ -253,7 +279,7 @@ func (s *Service) renderConfig(ctx context.Context, chatID, msgID int64, d *draf
 // startTaskDraft resolves a pasted link/address and opens the config panel.
 func (s *Service) startTaskDraft(ctx context.Context, chatID int64, text string) {
 	mid := s.sendKB(ctx, chatID, "🔎 Resolving…", nil)
-	d, err := s.resolveLink(ctx, text)
+	d, err := s.resolveInput(ctx, text)
 	if err != nil {
 		s.editKB(ctx, chatID, mid, "❌ "+err.Error(), backToMenu)
 		return
@@ -306,12 +332,19 @@ func (s *Service) createFromDraft(ctx context.Context, chatID, msgID int64, d *d
 		ChainID:         d.chainID,
 		ContractAddress: d.contract,
 		Mode:            engine.Mode(d.mode),
-		Seadrop:         d.seadrop,
-		Quantity:        d.quantity,
-		MintPriceWei:    d.priceWei,
 		Group:           group,
 		WalletIDs:       s.walletIDsForGroup(d.group), // nil = all evm wallets
 		Gas:             evm.GasParams{Mode: evm.GasAuto},
+	}
+	switch {
+	case d.hexMode:
+		cfg.HexMode = true
+		cfg.RawHex = d.rawHex
+		cfg.ValueWei = d.valueWei
+	case d.seadrop:
+		cfg.Seadrop = true
+		cfg.Quantity = d.quantity
+		cfg.MintPriceWei = d.priceWei
 	}
 	id, err := s.eng.Create(cfg)
 	if err != nil {
@@ -375,9 +408,74 @@ func (s *Service) handleCallback(ctx context.Context, u tgUpdate) {
 
 // --- link resolution (mirrors the dashboard's /nft/resolve-link) ---
 
-func looksLikeNftLink(text string) bool {
+// looksLikeTaskInput reports whether a plain message should open the task panel:
+// an OpenSea link, an explorer (etherscan-family) link, a contract address, or a tx hash.
+func looksLikeTaskInput(text string) bool {
 	t := strings.TrimSpace(text)
-	return common.IsHexAddress(t) || strings.Contains(strings.ToLower(t), "opensea.io")
+	if common.IsHexAddress(t) || isTxHash(t) {
+		return true
+	}
+	low := strings.ToLower(t)
+	if strings.Contains(low, "opensea.io") {
+		return true
+	}
+	return explorerChainOf(low) != 0
+}
+
+func isTxHash(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) != 66 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+	for i := 2; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// explorerChains maps an explorer domain to its chainId (etherscan family).
+var explorerChains = map[string]int{
+	"etherscan.io": 1, "polygonscan.com": 137, "basescan.org": 8453,
+	"optimistic.etherscan.io": 10, "bscscan.com": 56, "lineascan.build": 59144,
+	"arbiscan.io": 42161, "sepolia.etherscan.io": 11155111,
+}
+
+// explorerChainOf returns the chainId for the longest explorer domain found in low
+// (so "sepolia.etherscan.io" beats "etherscan.io"), or 0 if none.
+func explorerChainOf(low string) int {
+	best, bestLen := 0, 0
+	for dom, id := range explorerChains {
+		if len(dom) > bestLen && strings.Contains(low, dom) {
+			best, bestLen = id, len(dom)
+		}
+	}
+	return best
+}
+
+// parseExplorerURL extracts a tx hash or address from an explorer URL.
+func parseExplorerURL(text string) (kind, value string, chainID int, ok bool) {
+	chainID = explorerChainOf(strings.ToLower(text))
+	if chainID == 0 {
+		return "", "", 0, false
+	}
+	u := text
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u = u[:i]
+	}
+	parts := strings.Split(strings.Trim(u, "/"), "/")
+	for i, p := range parts {
+		lp := strings.ToLower(p)
+		if lp == "tx" && i+1 < len(parts) && isTxHash(parts[i+1]) {
+			return "tx", parts[i+1], chainID, true
+		}
+		if (lp == "address" || lp == "token") && i+1 < len(parts) && common.IsHexAddress(parts[i+1]) {
+			return "addr", parts[i+1], chainID, true
+		}
+	}
+	return "", "", chainID, false
 }
 
 // parseNftLink extracts a contract / collection-slug / chain from a raw address, an
@@ -416,9 +514,24 @@ func parseNftLink(text string) (contract, slug string, chainID int) {
 	return contract, slug, chainID
 }
 
+// resolveInput dispatches a pasted message to the right resolver: tx hash / explorer
+// /tx/ link -> replay; explorer /address|token/ link -> contract; else OpenSea/contract.
+func (s *Service) resolveInput(ctx context.Context, text string) (*draft, error) {
+	t := strings.TrimSpace(text)
+	if isTxHash(t) {
+		return s.resolveTx(ctx, t, 1)
+	}
+	if kind, val, chainID, ok := parseExplorerURL(t); ok {
+		if kind == "tx" {
+			return s.resolveTx(ctx, val, chainID)
+		}
+		return s.resolveContract(ctx, val, chainID, "")
+	}
+	return s.resolveLink(ctx, t)
+}
+
 func (s *Service) resolveLink(ctx context.Context, text string) (*draft, error) {
 	contract, slug, chainID := parseNftLink(text)
-
 	name := ""
 	if contract == "" && slug != "" {
 		if !s.osc.HasKey() {
@@ -433,10 +546,14 @@ func (s *Service) resolveLink(ctx context.Context, text string) (*draft, error) 
 			chainID = id
 		}
 	}
-	if !common.IsHexAddress(contract) {
-		return nil, errors.New("couldn't find a contract for that link")
-	}
+	return s.resolveContract(ctx, contract, chainID, name)
+}
 
+// resolveContract builds a mint/contract draft (detects SeaDrop + collection name).
+func (s *Service) resolveContract(ctx context.Context, contract string, chainID int, name string) (*draft, error) {
+	if !common.IsHexAddress(contract) {
+		return nil, errors.New("couldn't find a contract for that")
+	}
 	d := &draft{chainID: chainID, contract: common.HexToAddress(contract).Hex(), name: name, mode: "simulate", quantity: 1}
 	if client, err := s.clientForChain(ctx, chainID); err == nil {
 		cAddr := common.HexToAddress(contract)
@@ -450,6 +567,37 @@ func (s *Service) resolveLink(ctx context.Context, text string) (*draft, error) 
 				d.maxPerWallet = int(res.Drop.MaxTotalMintableByWallet)
 			}
 		}
+	}
+	return d, nil
+}
+
+// resolveTx builds a replay draft from a tx hash — copies its target, calldata, and value
+// so each of the user's wallets re-sends the same transaction.
+func (s *Service) resolveTx(ctx context.Context, hash string, chainID int) (*draft, error) {
+	client, err := s.clientForChain(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	tx, _, terr := client.TransactionByHash(ctx, common.HexToHash(hash))
+	if terr != nil {
+		return nil, fmt.Errorf("tx not found on chain %d — paste the matching explorer link", chainID)
+	}
+	if tx.To() == nil {
+		return nil, errors.New("that tx is a contract creation — nothing to replay")
+	}
+	to := *tx.To()
+	d := &draft{
+		chainID:  chainID,
+		contract: to.Hex(),
+		hexMode:  true,
+		rawHex:   hexutil.Encode(tx.Data()),
+		valueWei: tx.Value().String(),
+		mode:     "simulate",
+		quantity: 1,
+		name:     "Replay " + short(hash),
+	}
+	if cn := evm.CollectionName(ctx, client, to); cn != "" {
+		d.name = cn
 	}
 	return d, nil
 }
