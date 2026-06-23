@@ -649,7 +649,7 @@ function renderTasks(){
         <button class="icon" title="Run this wallet" onclick="taskAction(${r.taskId},'start',${r.walletId})">${IC.play}</button>
         <button class="icon" title="Stop this wallet" onclick="taskAction(${r.taskId},'stop',${r.walletId})">${IC.stop}</button>
         <button class="icon" title="Boost (whole task)" onclick="taskAction(${r.taskId},'boost')">${IC.boost}</button>
-        <button class="icon" title="Edit task" onclick="openTaskEdit(${r.taskId})">${IC.edit}</button>
+        <button class="icon" title="Edit this wallet" onclick="openTaskEdit(${r.taskId},${r.walletId})">${IC.edit}</button>
         <button class="icon danger" title="Delete task" onclick="delTask(${r.taskId})">${IC.trash}</button>
       </td></tr>`;
   }).join("") || `<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">No wallets — add wallets or create a task with New Task</td></tr>`;
@@ -735,7 +735,7 @@ async function stopGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CU
 async function boostGroup(){ Object.values(TASKS).filter(t=>t.group===CUR_GROUP).forEach(t=>api(`/tasks/${t.id}/boost`,{method:"POST"}).catch(()=>{})); }
 
 // create / edit task modal
-let TASK_MODE="simulate", EDIT_ID=null, EDIT_CFG=null, SEADROP_ON=false, _linkTimer=null, PHASES=[];
+let TASK_MODE="simulate", EDIT_ID=null, EDIT_CFG=null, EDIT_WALLET=null, SEADROP_ON=false, _linkTimer=null, PHASES=[];
 function toggleHex(){ const h=$("tHex").checked; $("hexFld").classList.toggle("hide",!h); }
 // ---- ABI helper: paste or fetch a contract ABI, pick a function from a dropdown ----
 let ABI_FNS=[];
@@ -898,15 +898,15 @@ function resetTaskForm(){
   const fr=$("fnRow"); if(fr) fr.style.display=""; const pr=$("paramsRow"); if(pr) pr.style.display="";
 }
 async function openTaskModal(){
-  EDIT_ID=null; EDIT_CFG=null; ensureSelectors(); resetTaskForm();
+  EDIT_ID=null; EDIT_CFG=null; EDIT_WALLET=null; ensureSelectors(); resetTaskForm();
   await taskWS.reload(); taskWS.clear();
   if(taskRS){ await taskRS.reload(); taskRS.clear(); }
   try{ PROXIES = await api("/proxies"); }catch{} fillProxyGroups(); if($("tProxyGroup")) $("tProxyGroup").value="";
   $("taskModalTitle").textContent="Create Task"; $("taskSubmitBtn").textContent="Create"; openModal("taskModal");
 }
-async function openTaskEdit(id){
+async function openTaskEdit(id, walletId){
   let cfg; try{ cfg=await api("/tasks/"+id); }catch(e){ return toast(e.message,"error"); }
-  EDIT_ID=id; EDIT_CFG=cfg; ensureSelectors(); resetTaskForm();
+  EDIT_ID=id; EDIT_CFG=cfg; ensureSelectors(); resetTaskForm(); EDIT_WALLET=walletId||null;
   $("tGroup").value=cfg.group||CUR_GROUP; if(cfg.chainId)$("tChain").value=cfg.chainId; $("tContract").value=cfg.contractAddress||"";
   $("tHex").checked=!!cfg.hexMode; toggleHex(); $("tFn").value=cfg.functionSig||""; $("tRawHex").value=cfg.rawHex||"";
   $("tParams").value=(cfg.params||[]).join(";"); $("tValue").value=cfg.valueWei||"0";
@@ -916,7 +916,7 @@ async function openTaskEdit(id){
   const g=cfg.gas||{}; $("tGasMode").value=g.mode||"auto"; if(g.maxFeeGwei!=null)$("tMaxFee").value=g.maxFeeGwei; if(g.priorityFeeGwei!=null)$("tPrio").value=g.priorityFeeGwei; if(g.gasLimit!=null)$("tGasLimit").value=g.gasLimit;
   pickMode(cfg.mode||"simulate");
   if(cfg.startAt && $("tStartAt")) $("tStartAt").value=cfg.startAt; updateStartHint();
-  await taskWS.reload(); taskWS.setSelected(cfg.walletIds||[]);
+  await taskWS.reload(); taskWS.setSelected(EDIT_WALLET?[EDIT_WALLET]:(cfg.walletIds||[]));
   if(taskRS){ await taskRS.reload(); taskRS.setSelected(cfg.rpcUrls||[]); }
   try{ PROXIES = await api("/proxies"); }catch{} fillProxyGroups(); if($("tProxyGroup")) $("tProxyGroup").value=cfg.proxyGroup||"";
   if(cfg.seadrop){
@@ -926,7 +926,9 @@ async function openTaskEdit(id){
     if($("tStartAt")&&cfg.startAt){ $("tStartAt").value=cfg.startAt; updateStartHint(); }   // keep saved time over phase default
     pickMode(cfg.mode||"simulate");
   }
-  $("taskModalTitle").textContent="Edit Task"; $("taskSubmitBtn").textContent="Save"; openModal("taskModal");
+  const multi = ((cfg.walletIds||[]).length||999) > 1; // imported tasks have many wallets
+  $("taskModalTitle").textContent = (EDIT_WALLET && multi) ? "Edit Wallet (splits into its own task)" : "Edit Task";
+  $("taskSubmitBtn").textContent="Save"; openModal("taskModal");
 }
 function buildTaskConfig(){
   const hex=$("tHex").checked;
@@ -966,8 +968,19 @@ async function createTask(){
     return toast("Set a Function (e.g. mint(uint256)), enable Hex, or paste a SeaDrop link/address","error");
   try{
     if(EDIT_ID){
-      const merged={...(EDIT_CFG||{}), ...cfg}; // preserve seadrop/quantity/etc not in the form
-      await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify(merged)}); toast("Task saved","success");
+      const orig=EDIT_CFG||{};
+      let origIds=(orig.walletIds&&orig.walletIds.length)?orig.walletIds.slice():WALLETS.filter(w=>w.network==="evm").map(w=>w.id);
+      if(EDIT_WALLET && origIds.length>1){
+        // Editing ONE wallet of a multi-wallet task: split it into its own task with the
+        // new settings; the other wallets keep the original config (so editing one ≠ all).
+        const split={...orig, ...cfg, walletIds:[EDIT_WALLET]};
+        await api("/tasks",{method:"POST",body:JSON.stringify(split)});
+        await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify({...orig, walletIds:origIds.filter(id=>id!==EDIT_WALLET)})});
+        toast("Saved — this wallet split into its own task; the others are unchanged","success");
+      } else {
+        const merged={...orig, ...cfg}; // preserve seadrop/quantity/etc not in the form
+        await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify(merged)}); toast("Task saved","success");
+      }
     } else {
       await api("/tasks",{method:"POST",body:JSON.stringify(cfg)}); toast("Task created","success");
     }
