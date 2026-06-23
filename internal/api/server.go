@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -33,6 +34,8 @@ type Server struct {
 	hub   *events.Hub
 	tg    *telegram.Service
 	osc   *opensea.Client
+
+	fundCancels sync.Map // runId -> context.CancelFunc for in-flight disperse/consolidate
 }
 
 func New(st *store.Store, vault *crypto.Vault, pool *rpc.Pool, eng *engine.Engine, log *logger.Logger, hub *events.Hub, tg *telegram.Service) *Server {
@@ -68,6 +71,8 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/wallets/reveal", s.handleRevealWalletsBulk)
 		r.Post("/wallets/{id}/send", s.handleSendFunds)
 		r.Post("/wallets/balances", s.handleBalances)
+		r.Post("/funds/move", s.handleFundsMove)     // disperse / consolidate (native + ERC-20)
+		r.Post("/funds/cancel", s.handleFundsCancel) // halt an in-flight run
 
 		r.Get("/rpc", s.handleListRPC)
 		r.Post("/rpc", s.handleAddRPC)

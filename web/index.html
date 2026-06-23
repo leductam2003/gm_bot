@@ -534,21 +534,31 @@
   <div class="modal" style="width:560px">
     <div class="mhead"><h3>Manage Funds</h3><span class="close" onclick="closeModal('fundsModal')">&times;</span></div>
     <div class="mbody">
-      <label class="fld">ERC-20 Contract Address (optional)<input id="fToken" placeholder="Leave blank for native token" /></label>
-      <div class="modegrid" style="margin-top:14px">
-        <div class="modecard active" id="mDisperse" onclick="pickFundMode('disperse')"><div class="mc-t">DISPERSE</div><div class="mc-s">One to many</div></div>
-        <div class="modecard" id="mConsolidate" onclick="pickFundMode('consolidate')"><div class="mc-t">CONSOLIDATE</div><div class="mc-s">Many to one</div></div>
+      <div class="modegrid">
+        <div class="modecard active" id="mDisperse" onclick="pickFundMode('disperse')"><div class="mc-t">DISPERSE</div><div class="mc-s">One → many</div></div>
+        <div class="modecard" id="mConsolidate" onclick="pickFundMode('consolidate')"><div class="mc-t">CONSOLIDATE</div><div class="mc-s">Many → one</div></div>
       </div>
       <div class="grid" style="margin-top:14px">
-        <label class="fld">Source (group/addr)<input id="fSource" placeholder="funder group" /></label>
-        <label class="fld">Destinations (group)<input id="fDest" placeholder="main" /></label>
+        <label class="fld">Chain<select id="fChain"></select></label>
+        <label class="fld">Token (optional)<input id="fToken" placeholder="ERC-20 address — blank = native" /></label>
       </div>
-      <label class="fld" style="margin-top:12px">Amount per wallet (ETH)<input id="fAmount" placeholder="0.00" /></label>
-      <div class="warnbox">Disperse / Consolidate will be enabled in Phase 5 (on-chain transfers). The UI is ready.</div>
+      <div id="fDisperseFields">
+        <label class="fld" style="margin-top:12px">From — funder wallet<select id="fFrom"></select></label>
+        <label class="fld" style="margin-top:12px">To — recipients<div class="wsel" id="fToSel"></div></label>
+        <label class="fld" style="margin-top:12px">Amount per wallet<input id="fAmount" placeholder="0.00" /></label>
+      </div>
+      <div id="fConsolidateFields" style="display:none">
+        <label class="fld" style="margin-top:12px">From — wallets to sweep<div class="wsel" id="fFromSel"></div></label>
+        <label class="fld" style="margin-top:12px">To — destination address<input id="fToAddr" placeholder="0x…" /></label>
+        <label class="fld" style="margin-top:12px"><span><input type="checkbox" id="fMax" checked onchange="toggleConsAmount()"> Sweep max (full balance − gas)</span></label>
+        <label class="fld" id="fConsAmtRow" style="margin-top:6px;display:none">Amount per wallet<input id="fConsAmount" placeholder="0.00" /></label>
+      </div>
+      <div id="fResults" class="fundres" style="display:none"></div>
+      <div class="warnbox">Sends real on-chain transactions from your wallets. Check the chain, amounts, and destination before confirming.</div>
     </div>
     <div class="mfoot">
       <button onclick="closeModal('fundsModal')">Cancel</button>
-      <button class="primary" onclick="doDisperse()">Disperse</button>
+      <button class="primary" id="fundsBtn" onclick="doFunds()">Disperse</button>
     </div>
   </div>
 </div>

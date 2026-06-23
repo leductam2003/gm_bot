@@ -230,6 +230,9 @@ tbody tr.rowsel:hover { background: oklch(0.84 0.11 350 / .08); }
 .modecard.active { border-color: var(--accent-line); background: var(--accent-soft); }
 .modecard .mc-t { font-weight: 700; letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
 .modecard .mc-s { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+.fundres { margin-top: 12px; max-height: 230px; overflow-y: auto; border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; }
+.fundrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; font-size: 12.5px; border-bottom: 1px solid var(--line2); }
+.fundrow:last-child { border-bottom: none; }
 
 /* toggle group */
 .toggles { display: flex; gap: 18px; align-items: center; }

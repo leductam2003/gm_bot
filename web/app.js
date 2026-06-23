@@ -369,10 +369,100 @@ async function loadBalances(){
     document.querySelectorAll("#walletRows tr").forEach(tr=>{ tr.querySelector(".bal").textContent=map[tr.dataset.addr.toLowerCase()]??"—"; });
   }catch(e){toast(e.message,"error");}
 }
-let FUND_MODE="disperse";
-function openFundsModal(){ openModal("fundsModal"); }
-function pickFundMode(m){ FUND_MODE=m; $("mDisperse").classList.toggle("active",m==="disperse"); $("mConsolidate").classList.toggle("active",m==="consolidate"); }
-function doDisperse(){ toast(`${FUND_MODE==="disperse"?"Disperse":"Consolidate"} will be enabled in Phase 5.`,"info"); }
+// ---------- manage funds (disperse / consolidate) ----------
+let FUND_MODE="disperse", fundToSel=null, fundFromSel=null, FUND_RUN=null;
+function pickFundMode(m){
+  FUND_MODE=m;
+  $("mDisperse").classList.toggle("active",m==="disperse");
+  $("mConsolidate").classList.toggle("active",m==="consolidate");
+  $("fDisperseFields").style.display = m==="disperse"?"":"none";
+  $("fConsolidateFields").style.display = m==="consolidate"?"":"none";
+  $("fundsBtn").textContent = m==="disperse"?"Disperse":"Consolidate";
+}
+function toggleConsAmount(){ $("fConsAmtRow").style.display = $("fMax").checked?"none":""; }
+async function openFundsModal(){
+  try{ WALLETS = await api("/wallets"); }catch{}
+  const disabled=new Set((APP_CFG.chainsDisabled)||[]);
+  $("fChain").innerHTML = (CHAINS||[]).filter(c=>!disabled.has(c.id)).map(c=>`<option value="${c.id}">${c.name} (${c.id})</option>`).join("");
+  $("fFrom").innerHTML = `<option value="">— pick funder —</option>` + (WALLETS||[]).map(w=>`<option value="${w.id}">${w.label}-${w.id} · ${short(w.address)}</option>`).join("");
+  if(!fundToSel) fundToSel = makeWalletSelect("fToSel");
+  if(!fundFromSel) fundFromSel = makeWalletSelect("fFromSel");
+  await fundToSel.reload(); await fundFromSel.reload();
+  ["fToken","fAmount","fToAddr","fConsAmount"].forEach(id=>$(id)&&($(id).value=""));
+  $("fMax").checked=true; toggleConsAmount();
+  FUND_RUN=null; $("fundsBtn").disabled=false;
+  $("fResults").style.display="none"; $("fResults").innerHTML="";
+  pickFundMode("disperse");
+  openModal("fundsModal");
+}
+const newRunId = ()=> "fn"+Date.now()+"-"+Math.floor(Math.random()*1e6); // unique per click/tab
+const fmtAmt = (n)=> Number(n.toFixed(8)).toString();                    // strip JS float drift
+const numOK = (v)=> v!=="" && !isNaN(+v) && +v>0;
+async function doFunds(){
+  if(FUND_RUN && !FUND_RUN.done) return toast("A transfer run is already in progress","info");
+  const chainId=Number($("fChain").value)||1, token=($("fToken").value||"").trim();
+  const unit=token?"tokens":"ETH";
+  let req;
+  if(FUND_MODE==="disperse"){
+    const fromWalletId=Number($("fFrom").value)||0;
+    // Explicit selection only — never disperse to "all wallets" by accident.
+    let toWalletIds = (fundToSel ? fundToSel.selected() : []).filter(id=>id!==fromWalletId);
+    const amountEth=($("fAmount").value||"").trim();
+    if(!fromWalletId) return toast("Pick a funder wallet","info");
+    if(!toWalletIds.length) return toast("Select recipient wallets (other than the funder)","info");
+    if(!numOK(amountEth)) return toast("Enter a valid amount per wallet","info");
+    const totalStr=fmtAmt(+amountEth*toWalletIds.length);
+    if(!await confirmDialog(`Disperse ${amountEth} ${unit} to ${toWalletIds.length} wallet(s)?\n≈ ${totalStr} ${unit} total + gas (native ETH), from the funder.`,"Disperse")) return;
+    req={ mode:"disperse", chainId, token, fromWalletId, toWalletIds, amountEth, runId:newRunId() };
+  } else {
+    // Explicit selection only — an empty selector must NOT sweep every wallet.
+    let fromWalletIds = fundFromSel ? fundFromSel.selected() : [];
+    const toAddress=($("fToAddr").value||"").trim();
+    const max=$("fMax").checked, amountEth=($("fConsAmount").value||"").trim();
+    if(!fromWalletIds.length) return toast("Select the source wallets to sweep","info");
+    if(!/^0x[0-9a-fA-F]{40}$/.test(toAddress)) return toast("Enter a valid destination address","info");
+    if(!max && !numOK(amountEth)) return toast("Enter a valid amount, or enable Sweep max","info");
+    const msg = max ? `Sweep the FULL balance of ${fromWalletIds.length} wallet(s) to ${short(toAddress)}?`
+                    : `Send ${amountEth} ${unit} from ${fromWalletIds.length} wallet(s) to ${short(toAddress)}?`;
+    if(!await confirmDialog(msg,"Consolidate")) return;
+    req={ mode:"consolidate", chainId, token, fromWalletIds, toAddress, max, amountEth, runId:newRunId() };
+  }
+  FUND_RUN={ id:req.runId, total:0, byIndex:{}, order:[], fatal:"", done:false };
+  $("fResults").style.display="block"; renderFunds();
+  $("fundsBtn").disabled=true;
+  try{
+    const r=await api("/funds/move",{method:"POST",body:JSON.stringify(req)});
+    FUND_RUN.total=r.total||0; renderFunds();
+  }catch(e){ toast(e.message,"error"); FUND_RUN.fatal=e.message; finishFundsRun(); renderFunds(); }
+}
+function stopFunds(){ if(FUND_RUN){ api("/funds/cancel",{method:"POST",body:JSON.stringify({runId:FUND_RUN.id})}).catch(()=>{}); toast("Stopping after the current transfer…","info"); } }
+function finishFundsRun(){ if(FUND_RUN) FUND_RUN.done=true; $("fundsBtn").disabled=false; }
+// WS push: one transfer finished.
+function fundsOnResult(d){
+  if(!FUND_RUN || d.runId!==FUND_RUN.id) return;
+  if(d.total) FUND_RUN.total=d.total;
+  if(d.fatal){ FUND_RUN.fatal=d.error||"failed"; finishFundsRun(); renderFunds(); toast(FUND_RUN.fatal,"error"); return; }
+  if(!(d.index in FUND_RUN.byIndex)) FUND_RUN.order.push(d.index);
+  FUND_RUN.byIndex[d.index]=d;
+  if(FUND_RUN.total && FUND_RUN.order.length>=FUND_RUN.total) finishFundsRun();
+  renderFunds();
+}
+function renderFunds(){
+  if(!FUND_RUN) return;
+  const rows=FUND_RUN.order.map(i=>FUND_RUN.byIndex[i]); let ok=0,fail=0;
+  const body=rows.map(r=>{
+    let stat;
+    if(r.error){ fail++; stat=`<span style="color:var(--danger)">✗ ${r.error}</span>`; }
+    else { ok++; stat=`<span style="color:var(--accent)">✓ ${r.txHash?short(r.txHash):"sent"}</span>`; }
+    return `<div class="fundrow"><span class="mono">${short(r.from||"")} → ${short(r.to||"")}</span>${stat}</div>`;
+  }).join("");
+  const running = !FUND_RUN.done && !FUND_RUN.fatal;
+  const stop = running ? ` · <span class="selclear" onclick="stopFunds()">Stop</span>` : "";
+  const head = FUND_RUN.fatal
+    ? `<div style="color:var(--danger);margin-bottom:6px">${FUND_RUN.fatal}</div>`
+    : `<div class="muted" style="margin-bottom:6px">${rows.length}/${FUND_RUN.total||"?"} done · ${ok} ✓ · ${fail} ✗${stop}</div>`;
+  $("fResults").innerHTML = head + (body || '<div class="muted">Starting…</div>');
+}
 
 // ---------- rpc ----------
 async function loadRPC(){
@@ -1180,6 +1270,7 @@ function connectWS(){
     if(m.type==="task"){ TASKS[m.data.id]=m.data; renderTasks(); }
     else if(m.type==="log"){ appendLog(m.data); }
     else if(m.type==="whitelist"){ wlOnResult(m.data); }
+    else if(m.type==="funds"){ fundsOnResult(m.data); }
   };
 }
 
