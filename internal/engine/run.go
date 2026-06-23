@@ -91,20 +91,21 @@ func (e *Engine) RunWallet(taskID, walletID int64) error {
 		}
 		return err
 	}
-	value := parseBigOr0(cfg.ValueWei)
+	wcfg := cfg.effective(walletID) // honor this wallet's per-wallet override, if any
+	value := parseBigOr0(wcfg.ValueWei)
 	go func() {
 		defer zeroKeys(wallets)
 		defer e.dropWalletCancel(rt, walletID)
 		lw := wallets[0]
-		if cfg.Mode == ModeSpam {
+		if wcfg.Mode == ModeSpam {
 			for ctx.Err() == nil {
-				e.runOne(ctx, rt, cfg, value, evm.ResolvedFees{}, lw)
-				if cfg.DelayMs > 0 {
-					sleepCtx(ctx, time.Duration(cfg.DelayMs)*time.Millisecond)
+				e.runOne(ctx, rt, wcfg, value, evm.ResolvedFees{}, lw)
+				if wcfg.DelayMs > 0 {
+					sleepCtx(ctx, time.Duration(wcfg.DelayMs)*time.Millisecond)
 				}
 			}
 		} else {
-			e.runOne(ctx, rt, cfg, value, evm.ResolvedFees{}, lw)
+			e.runOne(ctx, rt, wcfg, value, evm.ResolvedFees{}, lw)
 		}
 		if ctx.Err() != nil {
 			rt.setWallet(walletID, func(w *WalletStatus) {
@@ -261,7 +262,13 @@ func (e *Engine) runPass(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, w
 		wg.Add(1)
 		go func(lw loadedWallet) {
 			defer wg.Done()
-			e.runOne(ctx, rt, cfg, value, shared, lw)
+			wcfg, wval, fees := cfg, value, shared
+			if cfg.hasOverride(lw.id) { // this wallet carries its own settings (contract/gas/…)
+				wcfg = cfg.effective(lw.id)
+				wval = parseBigOr0(wcfg.ValueWei)
+				fees = evm.ResolvedFees{} // re-resolve, the override may use different gas
+			}
+			e.runOne(ctx, rt, wcfg, wval, fees, lw)
 		}(lw)
 	}
 	wg.Wait()

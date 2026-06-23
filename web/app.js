@@ -908,8 +908,11 @@ async function openTaskModal(){
   $("taskModalTitle").textContent="Create Task"; $("taskSubmitBtn").textContent="Create"; openModal("taskModal");
 }
 async function openTaskEdit(id, walletId){
-  let cfg; try{ cfg=await api("/tasks/"+id); }catch(e){ return toast(e.message,"error"); }
-  EDIT_ID=id; EDIT_CFG=cfg; ensureSelectors(); resetTaskForm(); EDIT_WALLET=walletId||null;
+  let base; try{ base=await api("/tasks/"+id); }catch(e){ return toast(e.message,"error"); }
+  EDIT_ID=id; EDIT_CFG=base; ensureSelectors(); resetTaskForm(); EDIT_WALLET=walletId||null;
+  // Fill the form from this wallet's EFFECTIVE config (its override if it has one), but keep
+  // EDIT_CFG = the base task so saving writes the override back into the SAME task.
+  const cfg=(walletId && base.walletOverrides && base.walletOverrides[walletId]) ? {...base, ...base.walletOverrides[walletId]} : base;
   $("tGroup").value=cfg.group||CUR_GROUP; if(cfg.chainId)$("tChain").value=cfg.chainId; $("tContract").value=cfg.contractAddress||"";
   $("tHex").checked=!!cfg.hexMode; toggleHex(); $("tFn").value=cfg.functionSig||""; $("tRawHex").value=cfg.rawHex||"";
   $("tParams").value=(cfg.params||[]).join(";"); $("tValue").value=cfg.valueWei||"0";
@@ -929,8 +932,8 @@ async function openTaskEdit(id, walletId){
     if($("tStartAt")&&cfg.startAt){ $("tStartAt").value=cfg.startAt; updateStartHint(); }   // keep saved time over phase default
     pickMode(cfg.mode||"simulate");
   }
-  const multi = ((cfg.walletIds||[]).length||999) > 1; // imported tasks have many wallets
-  $("taskModalTitle").textContent = (EDIT_WALLET && multi) ? "Edit Wallet (splits into its own task)" : "Edit Task";
+  const multi = ((EDIT_CFG.walletIds||[]).length||999) > 1; // imported tasks have many wallets
+  $("taskModalTitle").textContent = (EDIT_WALLET && multi) ? "Edit Wallet (this wallet only · same task)" : "Edit Task";
   $("taskSubmitBtn").textContent="Save"; openModal("taskModal");
 }
 function buildTaskConfig(){
@@ -974,12 +977,12 @@ async function createTask(){
       const orig=EDIT_CFG||{};
       let origIds=(orig.walletIds&&orig.walletIds.length)?orig.walletIds.slice():WALLETS.filter(w=>w.network==="evm").map(w=>w.id);
       if(EDIT_WALLET && origIds.length>1){
-        // Editing ONE wallet of a multi-wallet task: split it into its own task with the
-        // new settings; the other wallets keep the original config (so editing one ≠ all).
-        const split={...orig, ...cfg, walletIds:[EDIT_WALLET]};
-        await api("/tasks",{method:"POST",body:JSON.stringify(split)});
-        await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify({...orig, walletIds:origIds.filter(id=>id!==EDIT_WALLET)})});
-        toast("Saved — this wallet split into its own task; the others are unchanged","success");
+        // Editing ONE wallet of a multi-wallet task: store its settings as a per-wallet
+        // override in the SAME task (task id unchanged); the others keep the base config.
+        const ov={...cfg}; delete ov.walletOverrides; delete ov.walletIds; delete ov.group; delete ov.id;
+        const merged={...orig, walletOverrides:{...(orig.walletOverrides||{}), [EDIT_WALLET]:ov}};
+        await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify(merged)});
+        toast("Saved — only this wallet changed (same task id)","success");
       } else {
         const merged={...orig, ...cfg}; // preserve seadrop/quantity/etc not in the form
         await api("/tasks/"+EDIT_ID,{method:"PUT",body:JSON.stringify(merged)}); toast("Task saved","success");

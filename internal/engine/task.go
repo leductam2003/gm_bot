@@ -52,6 +52,29 @@ type TaskConfig struct {
 	Preflight       bool          `json:"preflight"` // action: eth_call before send
 	Flashbots       bool          `json:"flashbots"`   // ETH mainnet: send via private bundle (anti-frontrun)
 	PostAction      *PostAction   `json:"postAction,omitempty"` // chained follow-up after a successful action
+	// WalletOverrides lets a single wallet of a multi-wallet task carry its own settings
+	// (contract, params, gas, …) WITHOUT splitting into a new task — so editing one wallet
+	// keeps the same task id and leaves the others on the base config. Each override is a
+	// full config for that wallet; its own WalletOverrides is ignored (no nesting).
+	WalletOverrides map[int64]TaskConfig `json:"walletOverrides,omitempty"`
+}
+
+// effective returns the config to use for one wallet: its override if present, else base.
+func (c TaskConfig) effective(walletID int64) TaskConfig {
+	if c.WalletOverrides != nil {
+		if ov, ok := c.WalletOverrides[walletID]; ok {
+			ov.ID, ov.Group, ov.WalletIDs = c.ID, c.Group, c.WalletIDs
+			ov.WalletOverrides = nil
+			return ov
+		}
+	}
+	return c
+}
+
+// hasOverride reports whether a wallet carries its own settings.
+func (c TaskConfig) hasOverride(walletID int64) bool {
+	_, ok := c.WalletOverrides[walletID]
+	return ok
 }
 
 // PostAction is a follow-up performed after the main action (mint) succeeds on a wallet.
