@@ -29,6 +29,11 @@ type Client struct {
 
 func New() *Client { return &Client{hc: &http.Client{Timeout: 15 * time.Second}} }
 
+// NewWithClient builds a Client over a caller-provided http.Client (e.g. one with a
+// proxy transport), so OpenSea API calls can be routed through different IPs to dodge
+// per-IP rate limits. Key rotation + retry still apply.
+func NewWithClient(hc *http.Client) *Client { return &Client{hc: hc} }
+
 func (c *Client) HasKey() bool { return config.OpenSeaKey() != "" }
 
 func (c *Client) get(ctx context.Context, path string) ([]byte, int, error) {

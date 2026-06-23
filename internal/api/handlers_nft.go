@@ -20,6 +20,7 @@ import (
 	"zyperbot/internal/chains"
 	"zyperbot/internal/engine"
 	"zyperbot/internal/evm"
+	"zyperbot/internal/opensea"
 	"zyperbot/internal/logger"
 )
 
@@ -296,6 +297,8 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 		ContractAddress string  `json:"contractAddress"`
 		WalletIDs       []int64 `json:"walletIds"`
 		Group           string  `json:"group"`
+		Threads         int     `json:"threads"`
+		ProxyGroup      string  `json:"proxyGroup"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
@@ -349,13 +352,45 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 
 	slug, _ := s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
 
-	// Fetch every selected wallet concurrently (bounded) so 100s of wallets complete
-	// within the request budget. The opensea client retries 429s, so a throttled wallet
-	// recovers instead of being silently dropped (the cause of "only ~100 of 400 shown").
+	// Route OpenSea calls through a proxy group (one client per proxy URL, reused) so
+	// many wallets spread across IPs and dodge the per-IP rate limit. No group = direct.
+	var proxyURLs []string
+	if body.ProxyGroup != "" {
+		if ps, _ := s.st.ListProxiesByGroup(body.ProxyGroup); ps != nil {
+			for _, p := range ps {
+				proxyURLs = append(proxyURLs, p.URL)
+			}
+		}
+	}
+	oscByProxy := map[string]*opensea.Client{}
+	for _, px := range proxyURLs {
+		if _, ok := oscByProxy[px]; !ok {
+			oscByProxy[px] = opensea.NewWithClient(wlHTTPClient(px))
+		}
+	}
+	pick := func(i int) *opensea.Client {
+		if len(proxyURLs) == 0 {
+			return s.osc
+		}
+		return oscByProxy[proxyURLs[i%len(proxyURLs)]]
+	}
+
+	// Bounded concurrency (configurable). More proxies → safe to raise; one IP → keep low.
+	threads := body.Threads
+	if threads < 1 {
+		threads = 5
+	}
+	if threads > 30 {
+		threads = 30
+	}
+
+	// Fetch every selected wallet concurrently so 100s of wallets complete within budget.
+	// The opensea client retries 429s, so a throttled wallet recovers instead of being
+	// silently dropped (the cause of "only ~100 of 400 shown").
 	perWallet := make([][]nftItem, len(selected))
 	failed := 0
 	var fmu sync.Mutex
-	sem := make(chan struct{}, 5)
+	sem := make(chan struct{}, threads)
 	var wg sync.WaitGroup
 	for i := range selected {
 		wg.Add(1)
@@ -364,7 +399,8 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			sw := selected[i]
-			nfts, err := s.osc.AccountNFTs(r.Context(), chainSlug, sw.addr, slug, 200)
+			osc := pick(i)
+			nfts, err := osc.AccountNFTs(r.Context(), chainSlug, sw.addr, slug, 200)
 			if err != nil {
 				s.log.API(logger.WARN, "opensea account nfts failed", map[string]any{"wallet": sw.addr, "err": err.Error()})
 				fmu.Lock()
@@ -372,7 +408,7 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 				fmu.Unlock()
 				return
 			}
-			listed := s.osc.MakerListedTokenIDs(r.Context(), chainSlug, slug, sw.addr, body.ContractAddress)
+			listed := osc.MakerListedTokenIDs(r.Context(), chainSlug, slug, sw.addr, body.ContractAddress)
 			var out []nftItem
 			for _, n := range nfts {
 				if slug == "" && !strings.EqualFold(n.Contract, body.ContractAddress) {

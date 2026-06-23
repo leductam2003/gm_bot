@@ -242,7 +242,7 @@ function go(tab) {
   if (tab === "settings") { loadTelegram(); loadApiKeys(); loadSettingsPanel(); }
   if (tab === "calculator") renderCalc();
   if (tab === "logs") loadLogs();
-  if (tab === "nft") { ensureSelectors(); nftWS.reload(); }
+  if (tab === "nft") { ensureSelectors(); nftWS.reload(); loadNftProxies(); }
 }
 document.querySelectorAll("#nav a").forEach((a) => a.addEventListener("click", () => go(a.dataset.tab)));
 
@@ -975,15 +975,20 @@ let NFT_ITEMS = [], NFT_SEL = new Set(), NFT_VIEW = "card", NFT_SLUG = "", NFT_F
 const nftKey = (it) => it.walletId + ":" + it.tokenId;
 const ethToWei = (s) => { s = String(s || "").trim(); if (!s) return "0"; const [i, f = ""] = s.split("."); const frac = (f + "0".repeat(18)).slice(0, 18); try { return (BigInt(i || "0") * (10n ** 18n) + BigInt(frac || "0")).toString(); } catch { return "0"; } };
 
+async function loadNftProxies(){
+  try{ PROXIES = await api("/proxies"); }catch{}
+  const sel=$("nftProxy"); if(sel){ const cur=sel.value; const gs=new Set(["",...(PROXY_GROUPS||[])]); (PROXIES||[]).forEach(p=>gs.add(p.group)); sel.innerHTML=[...gs].map(g=>`<option value="${g}">${g||"none"}</option>`).join(""); sel.value=cur; }
+}
 async function nftLoad(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   if(!contract) return toast("Enter a contract address","error");
   const ids = nftWS ? nftWS.selected() : [];
+  const proxyGroup=($("nftProxy")||{}).value||""; const threads=Number($("nftThreads").value)||5;
   $("nftManagerCard").style.display="block";
   $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">Loading NFTs from OpenSea…</div>`;
   NFT_FLOOR=null; $("nftFloor").textContent="";
   try{
-    const r=await api("/nft/items",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,walletIds:ids})});
+    const r=await api("/nft/items",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,walletIds:ids,proxyGroup,threads})});
     NFT_ITEMS=r.items||[]; NFT_SEL.clear(); NFT_SLUG=r.slug||"";
     $("nftWalletInfo").textContent=`· ${r.wallets||0} wallet(s)`+(r.failed?` · ${r.failed} failed`:"");
     nftRender();

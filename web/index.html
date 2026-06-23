@@ -327,8 +327,11 @@
             <label class="fld" style="flex:2;min-width:240px">Contract Address<input id="nftContract" placeholder="0x..." /></label>
             <label class="fld" style="min-width:150px">Chain<select id="nftChain"></select></label>
             <label class="fld" style="flex:1;min-width:180px">Wallets<div class="wsel" id="nftWsel"></div></label>
+            <label class="fld" style="min-width:120px">Proxy Group<select id="nftProxy"><option value="">none</option></select></label>
+            <label class="fld" style="width:90px">Threads<input id="nftThreads" value="5" /></label>
             <button class="primary sm" onclick="nftLoad()">Load NFTs</button>
           </div>
+          <div class="muted" style="font-size:11px;text-transform:none;margin-top:6px">NFT list uses the OpenSea API (not RPC). Many wallets → use a proxy group + lower threads to avoid 429 rate limits.</div>
         </div>
         <div class="card" id="nftManagerCard" style="display:none">
           <div class="panel-head">
