@@ -633,6 +633,9 @@ function renderTasks(){
       rows.push({ key:t.id+":"+w.id, taskId:t.id, walletId:w.id, name:`${N} / ${w.label}-${w.id}`, address:lv.address||w.address||"",
         mode:t.mode, seadrop:t.seadrop, status:lv.status||"idle", detail:lv.detail||"", gasFee:lv.gasFee||"", value:t.valueWei||"0" }); });
   });
+  // Order rows by wallet (stable), not by task id — so a wallet edited/split into a new
+  // (higher-id) task keeps its position instead of jumping to the bottom of the list.
+  rows.sort((a,b)=> a.walletId - b.walletId || a.taskId - b.taskId);
   LAST_TASK_KEYS=rows.map(r=>r.key);
   const keys=new Set(LAST_TASK_KEYS); [...TASK_SEL].forEach(k=>{ if(!keys.has(k)) TASK_SEL.delete(k); });
   $("curGroup").textContent=CUR_GROUP; $("taskCount").textContent=`· ${rows.length} Tasks`;
