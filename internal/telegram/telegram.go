@@ -23,6 +23,7 @@ import (
 	"zyperbot/internal/engine"
 	"zyperbot/internal/events"
 	"zyperbot/internal/logger"
+	"zyperbot/internal/opensea"
 	"zyperbot/internal/rpc"
 	"zyperbot/internal/store"
 	"zyperbot/internal/wallet"
@@ -50,12 +51,16 @@ type Service struct {
 	hub   *events.Hub
 	log   *logger.Logger
 	hc    *http.Client
+	osc   *opensea.Client
+	drafts map[int64]*draft // chatID -> in-progress task config
 }
 
 func New(eng *engine.Engine, vault *crypto.Vault, st *store.Store, pool *rpc.Pool, hub *events.Hub, lg *logger.Logger) *Service {
 	return &Service{
 		eng: eng, vault: vault, st: st, pool: pool, hub: hub, log: lg,
 		notified: map[int64]string{},
+		drafts:   map[int64]*draft{},
+		osc:      opensea.New(),
 		hc:       &http.Client{Timeout: 65 * time.Second}, // > long-poll timeout
 	}
 }
@@ -138,18 +143,32 @@ func (s *Service) Running() bool {
 
 // --- polling ---
 
+type tgChat struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"` // "private" | "group" | "supergroup" | "channel"
+}
+
 type tgUpdate struct {
 	UpdateID int64 `json:"update_id"`
 	Message  *struct {
-		MessageID int64 `json:"message_id"`
-		Chat      struct {
-			ID int64 `json:"id"`
-		} `json:"chat"`
-		From struct {
+		MessageID int64  `json:"message_id"`
+		Chat      tgChat `json:"chat"`
+		From      struct {
 			Username string `json:"username"`
 		} `json:"from"`
 		Text string `json:"text"`
 	} `json:"message"`
+	Callback *struct {
+		ID   string `json:"id"`
+		Data string `json:"data"`
+		From struct {
+			Username string `json:"username"`
+		} `json:"from"`
+		Message *struct {
+			MessageID int64  `json:"message_id"`
+			Chat      tgChat `json:"chat"`
+		} `json:"message"`
+	} `json:"callback_query"`
 }
 
 func (s *Service) pollLoop(ctx context.Context) {
@@ -169,6 +188,10 @@ func (s *Service) pollLoop(ctx context.Context) {
 		}
 		for _, u := range ups {
 			offset = u.UpdateID + 1
+			if u.Callback != nil {
+				s.handleCallback(ctx, u)
+				continue
+			}
 			if u.Message == nil || u.Message.Text == "" {
 				continue
 			}
@@ -184,7 +207,7 @@ func (s *Service) token() string {
 }
 
 func (s *Service) getUpdates(ctx context.Context, offset int64) ([]tgUpdate, error) {
-	payload := map[string]any{"offset": offset, "timeout": 50, "allowed_updates": []string{"message"}}
+	payload := map[string]any{"offset": offset, "timeout": 50, "allowed_updates": []string{"message", "callback_query"}}
 	raw, err := s.call(ctx, "getUpdates", payload)
 	if err != nil {
 		return nil, err
@@ -245,11 +268,20 @@ func (s *Service) allowed(chatID int64) bool {
 
 func (s *Service) handle(ctx context.Context, u tgUpdate) {
 	chatID := u.Message.Chat.ID
+	if u.Message.Chat.Type != "private" {
+		return // DM-only: ignore group / supergroup / channel messages
+	}
 	text := strings.TrimSpace(u.Message.Text)
 
 	if !s.allowed(chatID) {
 		// Reveal only the caller's own chat id so they can add it in Settings.
 		s.send(ctx, chatID, fmt.Sprintf("⛔ Unauthorized.\nYour chat id: %d\nAdd it in Settings → Telegram to control the bot.", chatID))
+		return
+	}
+
+	// A pasted OpenSea collection link or contract address opens the task-config panel.
+	if looksLikeNftLink(text) {
+		s.startTaskDraft(ctx, chatID, text)
 		return
 	}
 
@@ -265,7 +297,9 @@ func (s *Service) handle(ctx context.Context, u tgUpdate) {
 	args := fields[1:]
 
 	switch cmd {
-	case "start", "help":
+	case "start", "menu":
+		s.showMenu(ctx, chatID, 0)
+	case "help":
 		s.send(ctx, chatID, helpText)
 	case "status":
 		s.send(ctx, chatID, s.statusText())
@@ -301,22 +335,21 @@ func arg0(args []string) string {
 	return ""
 }
 
-const helpText = `Zyper Bot — remote control
+const helpText = `GM Sniper — remote control
+
+/start — open the interactive menu
+Paste an OpenSea link or a contract (0x…) to set up a snipe task.
 
 Tasks
-/status — task counts
-/tasks — list tasks
+/status · /tasks
 /run <id> · /stop <id> · /boost <id>
 
 Wallets
-/wallets [group] — list wallets by group
-/newwallets <count> [group] — generate wallets
-/balance <chainId> [group] — native balances
+/wallets [group] · /newwallets <count> [group]
+/balance <chainId> [group]
 
 RPC
-/rpc — list endpoints
-/addrpc <chainId> <url> — add an endpoint
-/testrpc <chainId> — test latency`
+/rpc · /addrpc <chainId> <url> · /testrpc <chainId>`
 
 func (s *Service) statusText() string {
 	sums := s.eng.Summaries()
