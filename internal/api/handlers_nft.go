@@ -291,6 +291,34 @@ type nftItem struct {
 
 // POST /api/nft/items {chainId, contractAddress, walletIds?, group?}
 // Returns the selected wallets' NFTs in a collection with images + listing status.
+type selWallet struct {
+	id   int64
+	addr string
+}
+
+type nftStreamReq struct {
+	runID     string
+	total     int
+	chainSlug string
+	contract  string
+	threads   int
+	selected  []selWallet
+	proxyURLs []string
+}
+
+// nftStreamResult is one streamed wallet's NFTs (WS "nft" event); Done=true ends the run.
+type nftStreamResult struct {
+	RunID    string    `json:"runId"`
+	Total    int       `json:"total"`
+	Index    int       `json:"index"`
+	WalletID int64     `json:"walletId,omitempty"`
+	Owner    string    `json:"owner,omitempty"`
+	Items    []nftItem `json:"items,omitempty"`
+	Slug     string    `json:"slug,omitempty"`
+	Done     bool      `json:"done,omitempty"`
+	Failed   int       `json:"failed,omitempty"`
+}
+
 func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ChainID         int     `json:"chainId"`
@@ -299,6 +327,7 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 		Group           string  `json:"group"`
 		Threads         int     `json:"threads"`
 		ProxyGroup      string  `json:"proxyGroup"`
+		RunID           string  `json:"runId"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
@@ -326,10 +355,7 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 	for _, id := range body.WalletIDs {
 		want[id] = true
 	}
-	var selected []struct {
-		id   int64
-		addr string
-	}
+	var selected []selWallet
 	for _, wl := range ws {
 		if wl.Network != "evm" {
 			continue
@@ -340,20 +366,13 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 		if len(want) > 0 && !want[wl.ID] {
 			continue
 		}
-		selected = append(selected, struct {
-			id   int64
-			addr string
-		}{wl.ID, wl.Address})
+		selected = append(selected, selWallet{wl.ID, wl.Address})
 	}
 	if len(selected) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"items": []nftItem{}})
+		writeJSON(w, http.StatusOK, map[string]any{"runId": body.RunID, "total": 0})
 		return
 	}
 
-	slug, _ := s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
-
-	// Route OpenSea calls through a proxy group (one client per proxy URL, reused) so
-	// many wallets spread across IPs and dodge the per-IP rate limit. No group = direct.
 	var proxyURLs []string
 	if body.ProxyGroup != "" {
 		if ps, _ := s.st.ListProxiesByGroup(body.ProxyGroup); ps != nil {
@@ -362,20 +381,6 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	oscByProxy := map[string]*opensea.Client{}
-	for _, px := range proxyURLs {
-		if _, ok := oscByProxy[px]; !ok {
-			oscByProxy[px] = opensea.NewWithClient(wlHTTPClient(px))
-		}
-	}
-	pick := func(i int) *opensea.Client {
-		if len(proxyURLs) == 0 {
-			return s.osc
-		}
-		return oscByProxy[proxyURLs[i%len(proxyURLs)]]
-	}
-
-	// Bounded concurrency (configurable). More proxies → safe to raise; one IP → keep low.
 	threads := body.Threads
 	if threads < 1 {
 		threads = 5
@@ -384,51 +389,105 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 		threads = 30
 	}
 
-	// Fetch every selected wallet concurrently so 100s of wallets complete within budget.
-	// The opensea client retries 429s, so a throttled wallet recovers instead of being
-	// silently dropped (the cause of "only ~100 of 400 shown").
-	perWallet := make([][]nftItem, len(selected))
-	failed := 0
-	var fmu sync.Mutex
-	sem := make(chan struct{}, threads)
-	var wg sync.WaitGroup
-	for i := range selected {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			sw := selected[i]
-			osc := pick(i)
-			nfts, err := osc.AccountNFTs(r.Context(), chainSlug, sw.addr, slug, 200)
-			if err != nil {
-				s.log.API(logger.WARN, "opensea account nfts failed", map[string]any{"wallet": sw.addr, "err": err.Error()})
-				fmu.Lock()
-				failed++
-				fmu.Unlock()
-				return
-			}
-			listed := osc.MakerListedTokenIDs(r.Context(), chainSlug, slug, sw.addr, body.ContractAddress)
-			var out []nftItem
-			for _, n := range nfts {
-				if slug == "" && !strings.EqualFold(n.Contract, body.ContractAddress) {
-					continue
-				}
-				out = append(out, nftItem{
-					WalletID: sw.id, Owner: sw.addr, TokenID: n.TokenID,
-					Name: n.Name, Image: n.Image, Listed: listed[n.TokenID],
-				})
-			}
-			perWallet[i] = out
-		}(i)
-	}
-	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"runId": body.RunID, "total": len(selected)})
 
-	items := []nftItem{}
-	for _, w := range perWallet {
-		items = append(items, w...)
+	req := nftStreamReq{
+		runID: body.RunID, total: len(selected), chainSlug: chainSlug,
+		contract: body.ContractAddress, threads: threads, selected: selected, proxyURLs: proxyURLs,
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "slug": slug, "wallets": len(selected), "failed": failed})
+	// Stream over the WS (no 30s HTTP cap): each wallet's NFTs are pushed as fetched, and
+	// rate-limited wallets are retried in later rounds until none remain — so a 200-wallet
+	// fetch reaches ~100% instead of timing out partway.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		s.streamNftItems(ctx, req)
+	}()
+}
+
+func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
+	pub := func(res nftStreamResult) {
+		res.RunID = req.runID
+		res.Total = req.total
+		s.hub.Publish("nft", res)
+	}
+	slug, _ := s.osc.ContractSlug(ctx, req.chainSlug, req.contract)
+
+	// One opensea client per proxy URL (reused), so wallets spread across IPs.
+	oscByProxy := map[string]*opensea.Client{}
+	for _, px := range req.proxyURLs {
+		if _, ok := oscByProxy[px]; !ok {
+			oscByProxy[px] = opensea.NewWithClient(wlHTTPClient(px))
+		}
+	}
+	pick := func(i int) *opensea.Client {
+		if len(req.proxyURLs) == 0 {
+			return s.osc
+		}
+		return oscByProxy[req.proxyURLs[i%len(req.proxyURLs)]]
+	}
+
+	pending := make([]int, len(req.selected))
+	for i := range pending {
+		pending[i] = i
+	}
+	const maxRounds = 10
+	for round := 0; round < maxRounds && len(pending) > 0; round++ {
+		if ctx.Err() != nil {
+			break
+		}
+		if round > 0 { // cool-down between retry rounds, longer each time
+			wait := time.Duration(round) * 2 * time.Second
+			if wait > 12*time.Second {
+				wait = 12 * time.Second
+			}
+			if !wlSleep(ctx, wait) {
+				break
+			}
+		}
+		var next []int
+		var mu sync.Mutex
+		sem := make(chan struct{}, req.threads)
+		var wg sync.WaitGroup
+		for _, idx := range pending {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if ctx.Err() != nil {
+					mu.Lock()
+					next = append(next, i)
+					mu.Unlock()
+					return
+				}
+				sw := req.selected[i]
+				osc := pick(i)
+				nfts, err := osc.AccountNFTs(ctx, req.chainSlug, sw.addr, slug, 200)
+				if err != nil {
+					mu.Lock()
+					next = append(next, i) // retry this wallet next round
+					mu.Unlock()
+					return
+				}
+				listed := osc.MakerListedTokenIDs(ctx, req.chainSlug, slug, sw.addr, req.contract)
+				out := []nftItem{}
+				for _, n := range nfts {
+					if slug == "" && !strings.EqualFold(n.Contract, req.contract) {
+						continue
+					}
+					out = append(out, nftItem{
+						WalletID: sw.id, Owner: sw.addr, TokenID: n.TokenID,
+						Name: n.Name, Image: n.Image, Listed: listed[n.TokenID],
+					})
+				}
+				pub(nftStreamResult{Index: i, WalletID: sw.id, Owner: sw.addr, Items: out, Slug: slug})
+			}(idx)
+		}
+		wg.Wait()
+		pending = next
+	}
+	pub(nftStreamResult{Done: true, Failed: len(pending), Slug: slug})
 }
 
 // POST /api/nft/floor {chainId, contractAddress, slug?} — collection floor price (ETH).

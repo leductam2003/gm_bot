@@ -358,6 +358,8 @@ input[type=checkbox] { accent-color: oklch(0.84 0.11 350); }
 .nft-row .nr-owner { color: var(--muted2); font-size: 11.5px; }
 .nft-selbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; }
 .nselnum { width: 70px; padding: 6px 9px; font-family: var(--mono); }
+/* Keep the List/Send action bar pinned to the bottom so it's always reachable. */
+#nftActbar { position: sticky; bottom: 0; z-index: 6; background: var(--panel); margin-top: 14px; }
 .nft-cell { position: relative; background: rgba(255,255,255,.02); border: 2px solid var(--line); border-radius: 13px; overflow: hidden; cursor: pointer; transition: border-color .12s, transform .1s, box-shadow .12s; }
 .nft-cell:hover { transform: translateY(-3px); box-shadow: 0 14px 30px -16px rgba(0,0,0,.8); }
 .nft-cell.sel { border-color: var(--accent); box-shadow: inset 0 0 22px -8px var(--accent-glow); }

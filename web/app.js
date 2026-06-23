@@ -979,30 +979,60 @@ async function loadNftProxies(){
   try{ PROXIES = await api("/proxies"); }catch{}
   const sel=$("nftProxy"); if(sel){ const cur=sel.value; const gs=new Set(["",...(PROXY_GROUPS||[])]); (PROXIES||[]).forEach(p=>gs.add(p.group)); sel.innerHTML=[...gs].map(g=>`<option value="${g}">${g||"none"}</option>`).join(""); sel.value=cur; }
 }
+let NFT_RUN = null, _nftRenderT = null;
 async function nftLoad(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   if(!contract) return toast("Enter a contract address","error");
   const ids = nftWS ? nftWS.selected() : [];
   const proxyGroup=($("nftProxy")||{}).value||""; const threads=Number($("nftThreads").value)||5;
+  const runId="nft"+Date.now()+"-"+Math.floor(Math.random()*1e6);
+  NFT_ITEMS=[]; NFT_SEL.clear(); NFT_FLOOR=null; NFT_SLUG=""; $("nftFloor").textContent="";
+  NFT_RUN={ id:runId, total:0, doneWallets:0, failed:0, finished:false };
   $("nftManagerCard").style.display="block";
-  $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">Loading NFTs from OpenSea…</div>`;
-  NFT_FLOOR=null; $("nftFloor").textContent="";
+  $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">Fetching NFTs from OpenSea…</div>`;
+  $("nftCount").textContent="0 NFTs"; $("nftWalletInfo").textContent="";
   try{
-    const r=await api("/nft/items",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,walletIds:ids,proxyGroup,threads})});
-    NFT_ITEMS=r.items||[]; NFT_SEL.clear(); NFT_SLUG=r.slug||"";
-    $("nftWalletInfo").textContent=`· ${r.wallets||0} wallet(s)`+(r.failed?` · ${r.failed} failed`:"");
-    nftRender();
+    const r=await api("/nft/items",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,walletIds:ids,proxyGroup,threads,runId})});
+    NFT_RUN.total=r.total||0;
+    if(!NFT_RUN.total){ $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">No wallets selected.</div>`; NFT_RUN=null; return; }
+    updateNftProgress();
+  }catch(e){ $("nftGrid").innerHTML=`<div class="warnbox">${e.message}</div>`; NFT_RUN=null; }
+}
+// WS push: one wallet's NFTs arrived (or the run finished).
+function nftOnResult(d){
+  if(!NFT_RUN || d.runId!==NFT_RUN.id) return;
+  if(d.total) NFT_RUN.total=d.total;
+  if(d.slug) NFT_SLUG=d.slug;
+  if(d.done){
+    NFT_RUN.failed=d.failed||0; NFT_RUN.finished=true; updateNftProgress(); nftRender();
     if(!NFT_ITEMS.length) toast("No NFTs found for the selected wallet(s)","info");
-    else if(r.failed) toast(`${r.failed} wallet(s) were rate-limited — reload to fetch the rest`,"info");
-  }catch(e){ $("nftGrid").innerHTML=`<div class="warnbox">${e.message}</div>`; }
+    else if(d.failed) toast(`${d.failed} wallet(s) still failed after retries — add a proxy group / lower threads, then reload`,"info");
+    return;
+  }
+  NFT_RUN.doneWallets++;
+  if(d.items && d.items.length) NFT_ITEMS.push(...d.items);
+  updateNftProgress();
+  scheduleNftRender(); // debounced so 100s of wallets don't thrash the DOM
+}
+function scheduleNftRender(){ if(_nftRenderT) return; _nftRenderT=setTimeout(()=>{ _nftRenderT=null; nftRender(); }, 120); }
+function updateNftProgress(){
+  if(!NFT_RUN){ return; }
+  const {doneWallets:done,total,failed,finished}=NFT_RUN;
+  let s = (!finished && total) ? `· fetching ${done}/${total} wallet(s)…` : (total?`· ${total} wallet(s)`:"");
+  if(failed) s += ` · ${failed} failed`;
+  $("nftWalletInfo").textContent=s;
 }
 function nftToggleView(){ NFT_VIEW = NFT_VIEW==="card"?"list":"card"; $("nftViewBtn").textContent = NFT_VIEW==="card"?"List view":"Card view"; nftRender(); }
 function nftRender(){
   $("nftCount").textContent=`${NFT_ITEMS.length} NFTs`;
-  const g=$("nftGrid");
+  const g=$("nftGrid"); const sc=g.scrollTop; // preserve scroll across streaming re-renders
   g.classList.toggle("cardview", NFT_VIEW==="card");
   g.classList.toggle("listview", NFT_VIEW==="list");
-  if(!NFT_ITEMS.length){ g.innerHTML=`<div class="muted" style="padding:20px">No NFTs found.</div>`; nftUpdateBar(); return; }
+  if(!NFT_ITEMS.length){
+    const streaming = NFT_RUN && !NFT_RUN.finished;
+    g.innerHTML=`<div class="muted" style="padding:20px">${streaming?"Fetching NFTs from OpenSea…":"No NFTs found."}</div>`;
+    nftUpdateBar(); return;
+  }
   if(NFT_VIEW==="list"){
     g.innerHTML=NFT_ITEMS.map(it=>{
       const k=nftKey(it), sel=NFT_SEL.has(k);
@@ -1025,6 +1055,7 @@ function nftRender(){
         </div></div>`;
     }).join("");
   }
+  g.scrollTop=sc;
   nftUpdateBar();
 }
 function nftToggle(k){ NFT_SEL.has(k)?NFT_SEL.delete(k):NFT_SEL.add(k); nftRender(); }
@@ -1367,6 +1398,7 @@ function connectWS(){
     else if(m.type==="log"){ appendLog(m.data); }
     else if(m.type==="whitelist"){ wlOnResult(m.data); }
     else if(m.type==="funds"){ fundsOnResult(m.data); }
+    else if(m.type==="nft"){ nftOnResult(m.data); }
   };
 }
 
