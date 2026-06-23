@@ -35,12 +35,17 @@ Written in Go (single binary, pure-Go SQLite, no CGO) with a WebView2 desktop UI
 ## Build & Run
 
 ```bash
-# build (pure Go, no CGO)
-CGO_ENABLED=0 go build -o zyper-bot.exe ./cmd/server
+# Windows desktop build — no console window, just the UI (pure Go, no CGO).
+# -H windowsgui sets the GUI subsystem; logs still go to the logs/ folder.
+CGO_ENABLED=0 go build -ldflags="-H windowsgui" -o zyper-bot.exe ./cmd/server
+# (or just run ./build.ps1)
 
 # run — opens a native desktop window
 ./zyper-bot.exe
 ```
+
+> Building without `-ldflags="-H windowsgui"` produces a console-attached exe that
+> prints logs to a terminal — handy for debugging, but it shows a console window.
 
 The app stores its data next to the executable: `zyperbot.db` (SQLite), `vault.key`, `logs/`, and reads `.env` from the same folder. Keep the `web/` directory beside the binary.
 

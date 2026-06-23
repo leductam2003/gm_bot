@@ -35,12 +35,17 @@
 ## 构建与运行
 
 ```bash
-# 构建（纯 Go，无 CGO）
-CGO_ENABLED=0 go build -o zyper-bot.exe ./cmd/server
+# Windows 桌面构建——不弹出控制台窗口，只显示 UI（纯 Go，无 CGO）。
+# -H windowsgui 设置 GUI 子系统；日志仍写入 logs/ 文件夹。
+CGO_ENABLED=0 go build -ldflags="-H windowsgui" -o zyper-bot.exe ./cmd/server
+# （或直接运行 ./build.ps1）
 
 # 运行——打开原生桌面窗口
 ./zyper-bot.exe
 ```
+
+> 不加 `-ldflags="-H windowsgui"` 构建会生成附带控制台的 exe（把日志打印到终端）——
+> 便于调试，但会显示一个控制台窗口。
 
 应用会将数据保存在可执行文件旁边：`zyperbot.db`（SQLite）、`vault.key`、`logs/`，并从同一文件夹读取 `.env`。请将 `web/` 目录与二进制文件放在一起。
 

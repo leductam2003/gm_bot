@@ -35,12 +35,17 @@ Viết bằng Go (một file binary, SQLite thuần Go, không CGO) với giao d
 ## Build & Chạy
 
 ```bash
-# build (Go thuần, không CGO)
-CGO_ENABLED=0 go build -o zyper-bot.exe ./cmd/server
+# Build desktop Windows — KHÔNG hiện cửa sổ console, chỉ hiện UI (Go thuần, không CGO).
+# -H windowsgui đặt GUI subsystem; log vẫn ghi vào thư mục logs/.
+CGO_ENABLED=0 go build -ldflags="-H windowsgui" -o zyper-bot.exe ./cmd/server
+# (hoặc chạy ./build.ps1)
 
 # chạy — mở cửa sổ desktop native
 ./zyper-bot.exe
 ```
+
+> Build mà KHÔNG có `-ldflags="-H windowsgui"` sẽ tạo exe kèm console (in log ra
+> terminal) — tiện debug, nhưng sẽ hiện cửa sổ console.
 
 Ứng dụng lưu dữ liệu ngay cạnh file thực thi: `zyperbot.db` (SQLite), `vault.key`, `logs/`, và đọc `.env` từ cùng thư mục. Giữ thư mục `web/` bên cạnh binary.
 
