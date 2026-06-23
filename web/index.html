@@ -258,9 +258,7 @@
                   <label class="fld" style="grid-column:1/-1">Allowed Chat IDs (comma-separated)<input id="tgChats" placeholder="111222333, 444555666" /></label>
                   <label class="fld">Notify<select id="tgNotify"><option value="summary">task done + errors</option><option value="all">every tx</option><option value="off">off</option></select></label>
                   <label class="fld">Enable<select id="tgEnabled"><option value="true">on</option><option value="false">off</option></select></label>
-                  <label class="fld">Remote unlock<select id="tgUnlock"><option value="false">off (safer)</option><option value="true">on (risky)</option></select></label>
                 </div>
-                <div class="warnbox" id="tgUnlockWarn" style="display:none">Remote unlock: your password travels through the Telegram chat (not E2E). The bot deletes the message but a risk remains. Enable only if you understand it.</div>
                 <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveTelegram()">Save &amp; Start</button><span class="muted" id="tgStatus"></span></div>
               </div>
             </div>
@@ -409,7 +407,6 @@
         <label class="fld"><span><input type="checkbox" id="meMaxFeeOn"> Max Fee (gwei)</span><input id="meMaxFee" /></label>
         <label class="fld"><span><input type="checkbox" id="mePrioOn"> Priority (gwei)</span><input id="mePrio" /></label>
         <label class="fld"><span><input type="checkbox" id="meDelayOn"> Delay (ms)</span><input id="meDelay" /></label>
-        <label class="fld"><span><input type="checkbox" id="meConcOn"> Concurrency</span><input id="meConc" /></label>
         <label class="fld"><span><input type="checkbox" id="meMultiOn"> Multi-RPC</span><select id="meMulti"><option value="false">no</option><option value="true">yes</option></select></label>
         <label class="fld"><span><input type="checkbox" id="meFlashOn"> Flashbots</span><select id="meFlash"><option value="false">off</option><option value="true">on</option></select></label>
       </div>
@@ -454,7 +451,6 @@
         <label class="fld" style="grid-column:3/5">RPC Endpoints<div class="wsel" id="taskRsel"></div></label>
       </div>
       <div class="grid" style="margin-top:12px">
-        <label class="fld">Concurrency<input id="tConc" value="10" /></label>
         <label class="fld">Multi-RPC<select id="tMulti"><option value="false">no</option><option value="true">yes</option></select></label>
         <label class="fld">Proxy Group <span class="muted" style="text-transform:none">— OpenSea poll</span><select id="tProxyGroup"><option value="">none</option></select></label>
       </div>

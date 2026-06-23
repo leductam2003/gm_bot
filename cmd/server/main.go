@@ -81,7 +81,10 @@ func main() {
 	// No master password: auto-encrypt keys at rest with a locally-stored random
 	// secret (vault.key next to the db) and auto-unlock on startup.
 	if err := autoUnlockVault(vault, st, filepath.Join(base, "vault.key")); err != nil {
+		// autoUnlockVault self-heals a key/db mismatch, so an error here is a genuine
+		// I/O failure (can't read/write vault.key or the db) — don't run locked.
 		slog.Error("vault auto-unlock", "err", err)
+		os.Exit(1)
 	}
 	eng := engine.New(st, vault, pool, lg, hub)
 	if err := eng.Load(); err != nil {
@@ -205,20 +208,30 @@ func autoUnlockVault(v *crypto.Vault, st *store.Store, keyFile string) error {
 	pw := string(secret)
 	salt, e1 := st.GetSetting("vault.salt")
 	ver, e2 := st.GetSetting("vault.verifier")
-	if e1 != nil || e2 != nil {
-		p, ierr := crypto.Init(pw)
-		if ierr != nil {
-			return ierr
+	if e1 == nil && e2 == nil {
+		if uerr := v.Unlock(pw, crypto.InitParams{Salt: salt, Verifier: ver}); uerr == nil {
+			return nil
 		}
-		if serr := st.SetSetting("vault.salt", p.Salt); serr != nil {
-			return serr
-		}
-		if serr := st.SetSetting("vault.verifier", p.Verifier); serr != nil {
-			return serr
-		}
-		salt, ver = p.Salt, p.Verifier
+		// The key file no longer matches the stored salt/verifier (e.g. vault.key was
+		// replaced or the db was moved without it). Rather than leave the vault
+		// permanently locked with no way back, re-initialize it from the current key
+		// file so the app ALWAYS starts unlocked. Any wallet keys sealed with the
+		// previous secret can no longer be decrypted — but they were already unreadable
+		// in the locked state, so this only restores a working app.
+		slog.Warn("vault key/db mismatch — re-initializing the at-rest vault; wallets sealed with the old key become unreadable")
 	}
-	return v.Unlock(pw, crypto.InitParams{Salt: salt, Verifier: ver})
+	// First run, or recovering from a mismatch: create fresh salt/verifier.
+	p, ierr := crypto.Init(pw)
+	if ierr != nil {
+		return ierr
+	}
+	if serr := st.SetSetting("vault.salt", p.Salt); serr != nil {
+		return serr
+	}
+	if serr := st.SetSetting("vault.verifier", p.Verifier); serr != nil {
+		return serr
+	}
+	return v.Unlock(pw, p)
 }
 
 // exeDir is the directory of the running executable (falls back to "." if unknown).

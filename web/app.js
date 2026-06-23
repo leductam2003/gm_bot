@@ -271,13 +271,12 @@ async function loadChains() {
 
 // ---------- home ----------
 async function loadHome() {
-  const [ws, ts, rpc, st, tg] = await Promise.all([api("/wallets"), api("/tasks"), api("/rpc"), api("/status"), api("/telegram").catch(()=>({running:false}))]);
+  const [ws, ts, rpc, tg] = await Promise.all([api("/wallets"), api("/tasks"), api("/rpc"), api("/telegram").catch(()=>({running:false}))]);
   const card = (t,v,s)=>`<div class="card"><h2>${t}</h2><div style="font-size:26px;font-weight:700">${v}</div><div class="muted">${s||""}</div></div>`;
   $("homeCards").innerHTML =
     card("Wallets", ws.length, "stored") +
     card("Tasks", ts.length, ts.filter(t=>t.status==="running").length + " running") +
     card("RPC", rpc.length, "endpoints") +
-    card("Vault", st.unlocked ? "Unlocked" : "Locked", st.initialized ? "" : "not set up") +
     card("Telegram", tg.running ? "Live" : "Off", "remote control");
 }
 
@@ -601,7 +600,7 @@ function editSelected(){
   MASS_IDS=[...new Set([...TASK_SEL].map(k=>Number(k.split(":")[0])))];
   if(!MASS_IDS.length) return toast("Select rows first — their tasks will be edited","info");
   MASS_SEL=TASK_SEL.size;  // report by selected rows (tasks), not config count
-  ["meContract","meChain","meFn","meParams","meValue","meMode","meStart","meGroup","meGasMode","meMaxFee","mePrio","meDelay","meConc","meMulti","meFlash"]
+  ["meContract","meChain","meFn","meParams","meValue","meMode","meStart","meGroup","meGasMode","meMaxFee","mePrio","meDelay","meMulti","meFlash"]
     .forEach(id=>{ const cb=$(id+"On"); if(cb)cb.checked=false; });
   $("massCount").textContent=`(${MASS_SEL} task${MASS_SEL>1?'s':''})`;
   $("massApplyBtn").textContent=`Apply to ${MASS_SEL}`;
@@ -625,7 +624,6 @@ async function applyMassEdit(){
     if($("meMaxFeeOn").checked) cfg.gas.maxFeeGwei=Number($("meMaxFee").value)||0;
     if($("mePrioOn").checked) cfg.gas.priorityFeeGwei=Number($("mePrio").value)||0;
     if($("meDelayOn").checked) cfg.delayMs=Number($("meDelay").value)||0;
-    if($("meConcOn").checked) cfg.concurrency=Number($("meConc").value)||10;
     if($("meMultiOn").checked) cfg.multiRpc=$("meMulti").value==="true";
     if($("meFlashOn").checked) cfg.flashbots=$("meFlash").value==="true";
     try{ await api("/tasks/"+id,{method:"PUT",body:JSON.stringify(cfg)}); ok++; }catch{ fail++; }
@@ -797,7 +795,7 @@ function gasParams(){ const mode=$("tGasMode").value; const g={mode};
 function resetTaskForm(){
   ["tContract","tFn","tRawHex","tParams","tMaxFee","tPrio","tGasLimit","tNonce","tStartAt","tAbi"].forEach(id=>$(id)&&($(id).value=""));
   ABI_FNS=[]; if($("abiBlock"))$("abiBlock").classList.add("hide"); if($("abiFnFld"))$("abiFnFld").classList.add("hide"); if($("tAbiFn"))$("tAbiFn").innerHTML=""; if($("tParams"))$("tParams").placeholder="param1;param2  ({address}=wallet)";
-  $("tValue").value="0"; $("tDelay").value=String(APP_CFG.defaultDelayMs||0); $("tConc").value="10";
+  $("tValue").value="0"; $("tDelay").value=String(APP_CFG.defaultDelayMs||0);
   $("tHex").checked=false; toggleHex(); $("tMulti").value=APP_CFG.defaultMultiRpc?"true":"false"; $("tGasMode").value="auto"; $("tFlashbots").checked=false; if($("tProxyGroup")) $("tProxyGroup").value="";
   if($("tPostAction")) $("tPostAction").value="none"; if($("tPostDest")) $("tPostDest").value=""; if($("tPostDrain")) $("tPostDrain").checked=false; onPostActionChange();
   pickMode("simulate"); $("tGroup").value=CUR_GROUP; updateStartHint();
@@ -817,7 +815,7 @@ async function openTaskEdit(id){
   $("tGroup").value=cfg.group||CUR_GROUP; if(cfg.chainId)$("tChain").value=cfg.chainId; $("tContract").value=cfg.contractAddress||"";
   $("tHex").checked=!!cfg.hexMode; toggleHex(); $("tFn").value=cfg.functionSig||""; $("tRawHex").value=cfg.rawHex||"";
   $("tParams").value=(cfg.params||[]).join(";"); $("tValue").value=cfg.valueWei||"0";
-  $("tMulti").value=String(!!cfg.multiRpc); $("tDelay").value=cfg.delayMs||0; $("tConc").value=cfg.concurrency||10;
+  $("tMulti").value=String(!!cfg.multiRpc); $("tDelay").value=cfg.delayMs||0;
   $("tFlashbots").checked=!!cfg.flashbots; if(cfg.nonceOverride!=null)$("tNonce").value=cfg.nonceOverride;
   if(cfg.postAction){ if($("tPostAction"))$("tPostAction").value=cfg.postAction.type||"none"; if($("tPostDest"))$("tPostDest").value=cfg.postAction.destination||""; if($("tPostDrain"))$("tPostDrain").checked=!!cfg.postAction.drainEth; onPostActionChange(); }
   const g=cfg.gas||{}; $("tGasMode").value=g.mode||"auto"; if(g.maxFeeGwei!=null)$("tMaxFee").value=g.maxFeeGwei; if(g.priorityFeeGwei!=null)$("tPrio").value=g.priorityFeeGwei; if(g.gasLimit!=null)$("tGasLimit").value=g.gasLimit;
@@ -840,7 +838,7 @@ function buildTaskConfig(){
   const cfg={ group:$("tGroup").value||"Imported", chainId:Number($("tChain").value), contractAddress:$("tContract").value.trim(),
     mode:TASK_MODE, hexMode:hex, functionSig:hex?"":$("tFn").value.trim(), rawHex:hex?$("tRawHex").value.trim():"",
     params:hex?[]:$("tParams").value.split(";").map(s=>s.trim()).filter(s=>s!==""), valueWei:$("tValue").value.trim()||"0",
-    multiRpc:$("tMulti").value==="true", delayMs:Number($("tDelay").value)||0, concurrency:Number($("tConc").value)||10,
+    multiRpc:$("tMulti").value==="true", delayMs:Number($("tDelay").value)||0,
     flashbots:$("tFlashbots").checked, gas:gasParams() };
   // Always emit these keys (null/0 when cleared) so editing overrides the merge in createTask.
   if(TASK_MODE==="action" && $("tPostAction") && $("tPostAction").value!=="none"){
@@ -1144,15 +1142,14 @@ async function loadTelegram(){
   try{ const r=await api("/telegram"); const c=r.config||{};
     $("tgToken").value=""; $("tgToken").placeholder=c.token?`(saved: ${c.token})`:"123456:ABC-...";
     $("tgChats").value=(c.allowedChats||[]).join(", ");
-    $("tgNotify").value=c.notify||"summary"; $("tgEnabled").value=String(!!c.enabled); $("tgUnlock").value=String(!!c.allowUnlock);
-    $("tgUnlockWarn").style.display=c.allowUnlock?"block":"none";
+    $("tgNotify").value=c.notify||"summary"; $("tgEnabled").value=String(!!c.enabled);
     $("tgStatus").textContent=r.running?"running":"off";
-  }catch(e){ $("tgStatus").textContent="(unlock to configure)"; }
+  }catch(e){ $("tgStatus").textContent=""; }
 }
 async function saveTelegram(){
   const cfg={ enabled:$("tgEnabled").value==="true", token:$("tgToken").value.trim(),
     allowedChats:$("tgChats").value.split(",").map(s=>parseInt(s.trim(),10)).filter(n=>!isNaN(n)),
-    allowUnlock:$("tgUnlock").value==="true", notify:$("tgNotify").value };
+    notify:$("tgNotify").value };
   try{ const r=await api("/telegram",{method:"POST",body:JSON.stringify(cfg)}); $("tgStatus").textContent=r.running?"running":"off"; $("tgToken").value=""; loadTelegram(); toast("Telegram config saved","success"); }
   catch(e){ toast(e.message,"error"); }
 }
@@ -1171,7 +1168,6 @@ function clearLogView(){ $("logstream").innerHTML=""; }
 async function loadLogs(){ const es=await api("/logs"); clearLogView(); es.forEach(appendLog); }
 ["logCat","logLevel"].forEach(id=>$(id)&&$(id).addEventListener("change",loadLogs));
 $("tContract") && $("tContract").addEventListener("input", onContractInput);
-$("tgUnlock") && $("tgUnlock").addEventListener("change",()=>$("tgUnlockWarn").style.display=$("tgUnlock").value==="true"?"block":"none");
 
 // ---------- websocket ----------
 function connectWS(){

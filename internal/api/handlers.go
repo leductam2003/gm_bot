@@ -7,81 +7,17 @@ import (
 
 	"zyperbot/internal/chains"
 	"zyperbot/internal/config"
-	"zyperbot/internal/crypto"
 	"zyperbot/internal/logger"
 	"zyperbot/internal/store"
 	"zyperbot/internal/wallet"
 )
 
-const vaultSaltKey = "vault.salt"
-const vaultVerifierKey = "vault.verifier"
-
-// GET /api/status — vault state + counts, so the UI knows what screen to show.
+// GET /api/status — version + auto-managed vault state. Informational only.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	_, errSalt := s.st.GetSetting(vaultSaltKey)
-	initialized := errSalt == nil
 	writeJSON(w, http.StatusOK, map[string]any{
-		"initialized": initialized,
-		"unlocked":    s.vault.Unlocked(),
-		"version":     config.Version,
+		"unlocked": s.vault.Unlocked(),
+		"version":  config.Version,
 	})
-}
-
-// POST /api/vault/init {password} — first-run; create salt+verifier.
-func (s *Server) handleVaultInit(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Password string `json:"password"` }
-	if err := decode(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad json")
-		return
-	}
-	if _, err := s.st.GetSetting(vaultSaltKey); err == nil {
-		writeErr(w, http.StatusConflict, "vault already initialized")
-		return
-	}
-	p, err := crypto.Init(body.Password)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.st.SetSetting(vaultSaltKey, p.Salt); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := s.st.SetSetting(vaultVerifierKey, p.Verifier); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := s.vault.Unlock(body.Password, p); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// POST /api/vault/unlock {password}
-func (s *Server) handleVaultUnlock(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Password string `json:"password"` }
-	if err := decode(r, &body); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad json")
-		return
-	}
-	salt, err1 := s.st.GetSetting(vaultSaltKey)
-	ver, err2 := s.st.GetSetting(vaultVerifierKey)
-	if err1 != nil || err2 != nil {
-		writeErr(w, http.StatusBadRequest, "vault not initialized")
-		return
-	}
-	if err := s.vault.Unlock(body.Password, crypto.InitParams{Salt: salt, Verifier: ver}); err != nil {
-		writeErr(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// POST /api/vault/lock
-func (s *Server) handleVaultLock(w http.ResponseWriter, r *http.Request) {
-	s.vault.Lock()
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // GET /api/chains — registry chains plus any user-defined custom chains (app.config

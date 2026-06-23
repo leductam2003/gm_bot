@@ -1,6 +1,6 @@
 // Package telegram lets the operator drive the bot from a Telegram chat — list and
-// start/stop/boost tasks, check balances, and (opt-in) unlock the vault — so mints
-// can be triggered remotely. It long-polls getUpdates (no public URL needed, ideal
+// start/stop/boost tasks and check balances — so mints can be triggered remotely.
+// It long-polls getUpdates (no public URL needed, ideal
 // for a VPS) and pushes concise task done/failed notifications. Only chat IDs on the
 // allowlist may issue commands.
 package telegram
@@ -33,8 +33,7 @@ type Config struct {
 	Enabled      bool    `json:"enabled"`
 	Token        string  `json:"token"`
 	AllowedChats []int64 `json:"allowedChats"`
-	AllowUnlock  bool    `json:"allowUnlock"` // permit /unlock <password> over Telegram
-	Notify       string  `json:"notify"`      // "summary" | "all" | "off"
+	Notify       string  `json:"notify"` // "summary" | "all" | "off"
 }
 
 type Service struct {
@@ -278,11 +277,6 @@ func (s *Service) handle(ctx context.Context, u tgUpdate) {
 		s.cmdIDAction(ctx, chatID, args, "stop")
 	case "boost":
 		s.cmdIDAction(ctx, chatID, args, "boost")
-	case "unlock":
-		s.cmdUnlock(ctx, chatID, u.Message.MessageID, args)
-	case "lock":
-		s.vault.Lock()
-		s.send(ctx, chatID, "🔒 Vault locked.")
 	case "balance":
 		s.cmdBalance(ctx, chatID, args)
 	case "wallets":
@@ -309,18 +303,14 @@ func arg0(args []string) string {
 
 const helpText = `Zyper Bot — remote control
 
-Vault
-/status — vault + task counts
-/unlock <password> — unlock (if enabled; msg auto-deleted)
-/lock — lock the vault
-
 Tasks
+/status — task counts
 /tasks — list tasks
 /run <id> · /stop <id> · /boost <id>
 
 Wallets
 /wallets [group] — list wallets by group
-/newwallets <count> [group] — generate wallets (unlock first)
+/newwallets <count> [group] — generate wallets
 /balance <chainId> [group] — native balances
 
 RPC
@@ -329,10 +319,6 @@ RPC
 /testrpc <chainId> — test latency`
 
 func (s *Service) statusText() string {
-	locked := "🔒 locked"
-	if s.vault.Unlocked() {
-		locked = "🔓 unlocked"
-	}
 	sums := s.eng.Summaries()
 	running := 0
 	for _, t := range sums {
@@ -340,7 +326,7 @@ func (s *Service) statusText() string {
 			running++
 		}
 	}
-	return fmt.Sprintf("Vault: %s\nTasks: %d (running %d)", locked, len(sums), running)
+	return fmt.Sprintf("Tasks: %d (running %d)", len(sums), running)
 }
 
 func (s *Service) tasksText() string {
@@ -360,10 +346,6 @@ func (s *Service) cmdRun(ctx context.Context, chatID int64, args []string) {
 	id, ok := parseID(args)
 	if !ok {
 		s.send(ctx, chatID, "Usage: /run <id>")
-		return
-	}
-	if !s.vault.Unlocked() {
-		s.send(ctx, chatID, "🔒 Vault is locked. /unlock <password> first.")
 		return
 	}
 	if err := s.eng.Start(id); err != nil {
@@ -390,35 +372,6 @@ func (s *Service) cmdIDAction(ctx context.Context, chatID int64, args []string, 
 		}
 		s.send(ctx, chatID, fmt.Sprintf("⚡ Task #%d boosted.", id))
 	}
-}
-
-func (s *Service) cmdUnlock(ctx context.Context, chatID, msgID int64, args []string) {
-	// Always delete the message carrying the password, even if unlock is disabled.
-	defer s.deleteMessage(ctx, chatID, msgID)
-	s.mu.Lock()
-	allow := s.cfg.AllowUnlock
-	s.mu.Unlock()
-	if !allow {
-		s.send(ctx, chatID, "⛔ Remote unlock disabled. Enable it in Settings → Telegram (security risk).")
-		return
-	}
-	if len(args) < 1 {
-		s.send(ctx, chatID, "Usage: /unlock <password>")
-		return
-	}
-	password := strings.Join(args, " ")
-	salt, e1 := s.st.GetSetting("vault.salt")
-	ver, e2 := s.st.GetSetting("vault.verifier")
-	if e1 != nil || e2 != nil {
-		s.send(ctx, chatID, "Vault not initialized.")
-		return
-	}
-	if err := s.vault.Unlock(password, crypto.InitParams{Salt: salt, Verifier: ver}); err != nil {
-		s.send(ctx, chatID, "❌ Wrong password.")
-		return
-	}
-	s.log.API(logger.WARN, "vault unlocked via Telegram", map[string]any{"chat": chatID})
-	s.send(ctx, chatID, "🔓 Vault unlocked. (password message deleted)")
 }
 
 func (s *Service) cmdBalance(ctx context.Context, chatID int64, args []string) {
@@ -508,10 +461,6 @@ func (s *Service) walletsText(group string) string {
 }
 
 func (s *Service) cmdNewWallets(ctx context.Context, chatID int64, args []string) {
-	if !s.vault.Unlocked() {
-		s.send(ctx, chatID, "Vault is locked. /unlock <password> first.")
-		return
-	}
 	if len(args) < 1 {
 		s.send(ctx, chatID, "Usage: /newwallets <count> [group]")
 		return

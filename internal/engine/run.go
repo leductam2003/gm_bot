@@ -109,17 +109,13 @@ func (e *Engine) runTask(ctx context.Context, rt *TaskRuntime, cfg TaskConfig) {
 	}
 
 	value := parseBigOr0(cfg.ValueWei)
-	conc := cfg.Concurrency
-	if conc < 1 {
-		conc = 10
-	}
 
 	switch cfg.Mode {
 	case ModeSimulate, ModeAction:
-		e.runPass(ctx, rt, cfg, wallets, value, conc)
+		e.runPass(ctx, rt, cfg, wallets, value)
 	case ModeSpam:
 		for ctx.Err() == nil {
-			e.runPass(ctx, rt, cfg, wallets, value, conc)
+			e.runPass(ctx, rt, cfg, wallets, value)
 			if cfg.DelayMs > 0 {
 				sleepCtx(ctx, time.Duration(cfg.DelayMs)*time.Millisecond)
 			}
@@ -147,8 +143,9 @@ func (e *Engine) runTask(ctx context.Context, rt *TaskRuntime, cfg TaskConfig) {
 	e.notifyDiscord(rt, cfg, final)
 }
 
-// runPass runs all wallets once in batches of conc, with DelayMs between batches.
-func (e *Engine) runPass(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, wallets []loadedWallet, value *big.Int, conc int) {
+// runPass runs every wallet once, all concurrently (one goroutine per wallet — no
+// batch cap), then waits for them to finish.
+func (e *Engine) runPass(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, wallets []loadedWallet, value *big.Int) {
 	// Resolve gas fees once per pass (shared across wallets) to avoid RPC 429. On
 	// failure we log and fall back to per-wallet resolution in runOne. All modes send
 	// now (Simulate = eth_call then send), so always resolve fees.
@@ -161,27 +158,18 @@ func (e *Engine) runPass(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, w
 		shared = fees
 	}
 
-	for i := 0; i < len(wallets); i += conc {
-		if ctx.Err() != nil {
-			return
-		}
-		end := i + conc
-		if end > len(wallets) {
-			end = len(wallets)
-		}
-		var wg sync.WaitGroup
-		for _, lw := range wallets[i:end] {
-			wg.Add(1)
-			go func(lw loadedWallet) {
-				defer wg.Done()
-				e.runOne(ctx, rt, cfg, value, shared, lw)
-			}(lw)
-		}
-		wg.Wait()
-		if cfg.DelayMs > 0 && end < len(wallets) {
-			sleepCtx(ctx, time.Duration(cfg.DelayMs)*time.Millisecond)
-		}
+	if ctx.Err() != nil {
+		return
 	}
+	var wg sync.WaitGroup
+	for _, lw := range wallets {
+		wg.Add(1)
+		go func(lw loadedWallet) {
+			defer wg.Done()
+			e.runOne(ctx, rt, cfg, value, shared, lw)
+		}(lw)
+	}
+	wg.Wait()
 }
 
 func (e *Engine) runOne(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, value *big.Int, shared evm.ResolvedFees, lw loadedWallet) {

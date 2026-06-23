@@ -48,9 +48,8 @@ func (s *Server) Router(webDir string) http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.authGuard)
 		r.Get("/status", s.handleStatus)
-		r.Post("/vault/init", s.handleVaultInit)
-		r.Post("/vault/unlock", s.handleVaultUnlock)
-		r.Post("/vault/lock", s.handleVaultLock)
+		// Vault is auto-managed (no master password) and stays unlocked for the life of
+		// the process — there is no lock/unlock surface to expose.
 
 		r.Get("/chains", s.handleChains)
 
@@ -62,12 +61,12 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Get("/update/check", s.handleUpdateCheck)
 
 		r.Get("/wallets", s.handleListWallets)
-		r.With(s.requireUnlock).Post("/wallets/generate", s.handleGenerateWallets)
-		r.With(s.requireUnlock).Post("/wallets/import", s.handleImportWallets)
+		r.Post("/wallets/generate", s.handleGenerateWallets)
+		r.Post("/wallets/import", s.handleImportWallets)
 		r.Delete("/wallets/{id}", s.handleDeleteWallet)
-		r.With(s.requireUnlock).Post("/wallets/reveal/{id}", s.handleRevealWallet)
-		r.With(s.requireUnlock).Post("/wallets/reveal", s.handleRevealWalletsBulk)
-		r.With(s.requireUnlock).Post("/wallets/{id}/send", s.handleSendFunds)
+		r.Post("/wallets/reveal/{id}", s.handleRevealWallet)
+		r.Post("/wallets/reveal", s.handleRevealWalletsBulk)
+		r.Post("/wallets/{id}/send", s.handleSendFunds)
 		r.Post("/wallets/balances", s.handleBalances)
 
 		r.Get("/rpc", s.handleListRPC)
@@ -81,18 +80,18 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Delete("/proxies/{id}", s.handleDeleteProxy)
 		r.Post("/proxies/test", s.handleTestProxies)
 
-		r.With(s.requireUnlock).Post("/whitelist/check", s.handleWhitelistCheck)
+		r.Post("/whitelist/check", s.handleWhitelistCheck)
 
 		// Tasks (engine). Mutations that send funds require an unlocked vault.
 		r.Get("/tasks", s.handleListTasks)
 		r.Get("/tasks/{id}", s.handleGetTask)
-		r.With(s.requireUnlock).Post("/tasks", s.handleCreateTask)
-		r.With(s.requireUnlock).Put("/tasks/{id}", s.handleUpdateTask)
+		r.Post("/tasks", s.handleCreateTask)
+		r.Put("/tasks/{id}", s.handleUpdateTask)
 		r.Delete("/tasks/{id}", s.handleDeleteTask)
-		r.With(s.requireUnlock).Post("/tasks/{id}/start", s.handleStartTask)
+		r.Post("/tasks/{id}/start", s.handleStartTask)
 		r.Post("/tasks/{id}/stop", s.handleStopTask)
 		r.Post("/tasks/{id}/boost", s.handleBoostTask)
-		r.With(s.requireUnlock).Post("/tasks/group/{group}/start", s.handleStartGroup)
+		r.Post("/tasks/group/{group}/start", s.handleStartGroup)
 		r.Post("/tasks/group/{group}/stop", s.handleStopGroup)
 
 		// NFT (OpenSea SeaDrop + manager)
@@ -103,15 +102,15 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/nft/resolve", s.handleNftResolve)
 		r.Post("/nft/resolve-link", s.handleNftResolveLink)
 		r.Post("/nft/items", s.handleNftItems)
-		r.With(s.requireUnlock).Post("/nft/list", s.handleNftList)
-		r.With(s.requireUnlock).Post("/nft/cancel", s.handleNftCancel)
+		r.Post("/nft/list", s.handleNftList)
+		r.Post("/nft/cancel", s.handleNftCancel)
 
 		// Logs
 		r.Get("/logs", s.handleLogsSnapshot)
 
 		// Telegram remote-control config
 		r.Get("/telegram", s.handleGetTelegram)
-		r.With(s.requireUnlock).Post("/telegram", s.handleSetTelegram)
+		r.Post("/telegram", s.handleSetTelegram)
 	})
 
 	// WebSocket for live task + log streaming (registered at the full path so it
@@ -152,17 +151,6 @@ func (s *Server) authGuard(next http.Handler) http.Handler {
 			return
 		}
 		writeErr(w, http.StatusUnauthorized, "missing or invalid X-Auth-Token")
-	})
-}
-
-// requireUnlock blocks routes that need the vault key in memory.
-func (s *Server) requireUnlock(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.vault.Unlocked() {
-			writeErr(w, http.StatusLocked, "vault is locked — unlock first")
-			return
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

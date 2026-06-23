@@ -49,8 +49,7 @@ type TaskConfig struct {
 	NonceOverride   *uint64       `json:"nonceOverride,omitempty"`
 	DelayMs         int           `json:"delayMs"`
 	SpamGuardrailMs int           `json:"spamGuardrailMs"`
-	Concurrency     int           `json:"concurrency"` // wallets per batch (default 10)
-	Preflight       bool          `json:"preflight"`   // action: eth_call before send
+	Preflight       bool          `json:"preflight"` // action: eth_call before send
 	Flashbots       bool          `json:"flashbots"`   // ETH mainnet: send via private bundle (anti-frontrun)
 	PostAction      *PostAction   `json:"postAction,omitempty"` // chained follow-up after a successful action
 }
