@@ -1188,18 +1188,24 @@ async function nftListConfirm(){
   try{
     const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:days*86400,items})});
     closeModal("listModal");
-    const extra=[r.needApproval?`${r.needApproval} need approval (run NFT-Approve)`:"", r.failed?`${r.failed} failed`:""].filter(Boolean).join(" · ");
-    toast(`Listed ${r.listed||0}/${items.length}${extra?" · "+extra:""}`, (r.failed||r.needApproval)?"info":"success");
-    setTimeout(nftLoad,1500);
+    if(r.needApproval){ // first listing per wallet needs a one-time on-chain approval (now auto-running)
+      toast(`Approving ${r.needApproval} wallet(s) on-chain — wait ~30s for it to mine, then click List again.`,"info");
+    } else if(r.failed){
+      toast(`Listed ${r.listed||0}/${items.length} · ${r.failed} failed${r.error?": "+r.error:""}`,"error");
+    } else {
+      toast(`Listed ${r.listed||0}/${items.length}`,"success");
+    }
+    setTimeout(nftLoad,2200);
   }catch(e){ toast(e.message,"error"); }
 }
 async function nftCancel(){
   const sel=nftSelected().filter(it=>it.listed); if(!sel.length) return toast("No listed NFTs selected","info");
-  if(!await confirmDialog(`Cancel ${sel.length} listing(s)?`,"Cancel listings")) return;
+  const wallets=new Set(sel.map(it=>it.walletId)).size;
+  if(!await confirmDialog(`Cancel listings on ${wallets} wallet(s)?\nThis cancels ALL open Seaport listings for those wallets (one incrementCounter tx each).`,"Cancel listings")) return;
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   try{
     const r=await api("/nft/cancel",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:sel.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
-    toast(`Cancelled ${r.cancelled||0}/${sel.length}`, "success"); setTimeout(nftLoad,1500);
+    toast(`Cancelling ${r.cancelled||0} wallet(s)' listings on-chain — refresh in a moment`,"info"); setTimeout(nftLoad,3000);
   }catch(e){ toast(e.message,"error"); }
 }
 // SeaDrop mint via the NFT tab was removed — create mint tasks from the Tasks tab

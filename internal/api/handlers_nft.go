@@ -643,10 +643,17 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	}
 	listed, failed, needApproval := 0, failedPrice, 0
 	var approveTasks []int64
+	var firstErr string
+	keepErr := func(e string) {
+		if firstErr == "" {
+			firstErr = e
+		}
+	}
 	for walletID, litems := range byWallet {
 		key, owner, err := s.walletKey(walletID)
 		if err != nil {
 			failed += len(litems)
+			keepErr("wallet " + err.Error())
 			continue
 		}
 		approved, _ := evm.IsApprovedForConduit(r.Context(), client, contract, owner)
@@ -658,6 +665,7 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 			})
 			if id != 0 {
 				approveTasks = append(approveTasks, id)
+				_ = s.eng.Start(id) // auto-run the one-time approval; re-list once it mines
 			}
 			needApproval += len(litems)
 			wipeECDSA(key)
@@ -666,6 +674,7 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 		counter, cerr := evm.SeaportCounter(r.Context(), client, owner)
 		if cerr != nil {
 			failed += len(litems)
+			keepErr("counter: " + cerr.Error())
 			wipeECDSA(key)
 			continue
 		}
@@ -673,23 +682,26 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 			tokenID, ok := new(big.Int).SetString(li.tokenID, 10)
 			if !ok {
 				failed++
+				keepErr("bad token id " + li.tokenID)
 				continue
 			}
 			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt())
 			if berr != nil {
 				failed++
+				keepErr("sign: " + berr.Error())
 				continue
 			}
 			if perr := s.osc.PostListing(r.Context(), chainSlug, lst); perr != nil {
 				s.log.API(logger.WARN, "opensea post listing failed", map[string]any{"err": perr.Error()})
 				failed++
+				keepErr(perr.Error())
 				continue
 			}
 			listed++
 		}
 		wipeECDSA(key)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"listed": listed, "failed": failed, "needApproval": needApproval, "approveTasks": approveTasks})
+	writeJSON(w, http.StatusOK, map[string]any{"listed": listed, "failed": failed, "needApproval": needApproval, "approveTasks": approveTasks, "error": firstErr})
 }
 
 // POST /api/nft/cancel {chainId, contractAddress, items:[{walletId,tokenId}]}
@@ -721,11 +733,12 @@ func (s *Server) handleNftCancel(w http.ResponseWriter, r *http.Request) {
 		})
 		if err == nil && id != 0 {
 			created++
+			_ = s.eng.Start(id) // auto-run: actually send the on-chain cancel now
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cancelled": created,
-		"note":      "created incrementCounter tasks (cancels ALL Seaport listings for those wallets) — run them in Tasks",
+		"note":      "running incrementCounter per wallet — cancels ALL that wallet's open Seaport listings on-chain",
 	})
 }
 
