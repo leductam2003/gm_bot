@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -88,6 +89,14 @@ func (s *Server) handleStartTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	if wid := walletQuery(r); wid != 0 { // ?wallet=N → run just that one wallet (per-row ▶)
+		if err := s.eng.RunWallet(id, wid); err != nil {
+			writeErr(w, statusForTaskErr(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	if err := s.eng.Start(id); err != nil {
 		writeErr(w, statusForTaskErr(err), err.Error())
 		return
@@ -95,15 +104,26 @@ func (s *Server) handleStartTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// POST /api/tasks/{id}/stop
+// POST /api/tasks/{id}/stop  (optional ?wallet=N to stop a single wallet)
 func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	id, err := idParam(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad id")
 		return
 	}
+	if wid := walletQuery(r); wid != 0 {
+		s.eng.StopWallet(id, wid)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	s.eng.Stop(id)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// walletQuery parses an optional ?wallet=N param (0 if absent/invalid).
+func walletQuery(r *http.Request) int64 {
+	v, _ := strconv.ParseInt(r.URL.Query().Get("wallet"), 10, 64)
+	return v
 }
 
 // POST /api/tasks/{id}/boost

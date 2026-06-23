@@ -468,7 +468,7 @@
       </div>
       <div class="mintbox" id="taskNftHint" style="display:none"></div>
       <div class="grid" id="paramsRow" style="margin-top:12px">
-        <label class="fld" style="grid-column:1/3">Parameters<input id="tParams" placeholder="param1;param2  ({address}=wallet)" /></label>
+        <label class="fld" style="grid-column:1/3">Parameters<input id="tParams" placeholder="param1;param2  ({address}=wallet · {rand:1-10000}=random)" /></label>
         <label class="fld">Value<input id="tValue" value="0" /></label>
       </div>
       <div class="grid" style="margin-top:12px">
@@ -486,9 +486,9 @@
         <label class="fld">Priority Fee (gwei)<input id="tPrio" placeholder="auto" /></label>
       </div>
       <div class="grid" style="margin-top:12px">
+        <input id="tGroup" type="hidden" value="Imported" />
         <label class="fld">Nonce<input id="tNonce" placeholder="auto" /></label>
         <label class="fld">Delay (ms)<input id="tDelay" value="0" /></label>
-        <label class="fld">Group<input id="tGroup" value="Imported" /></label>
         <label class="fld" style="justify-content:flex-end"><span style="text-transform:none" title="ETH mainnet: send via Flashbots private bundle (anti-frontrun)"><input type="checkbox" id="tFlashbots" /> Flashbots</span></label>
       </div>
       <div class="grid" style="margin-top:12px">

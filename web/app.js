@@ -630,7 +630,7 @@ function renderTasks(){
     if(!wlist.length && (t.wallets||[]).length) wlist=t.wallets.map(w=>({id:w.walletId,label:"wallet",address:w.address}));
     const N=wlist.length || (t.wallets||[]).length;
     wlist.forEach(w=>{ const lv=live[w.id]||{};
-      rows.push({ key:t.id+":"+w.id, taskId:t.id, name:`${N} / ${w.label}-${w.id}`, address:lv.address||w.address||"",
+      rows.push({ key:t.id+":"+w.id, taskId:t.id, walletId:w.id, name:`${N} / ${w.label}-${w.id}`, address:lv.address||w.address||"",
         mode:t.mode, seadrop:t.seadrop, status:lv.status||"idle", detail:lv.detail||"", gasFee:lv.gasFee||"", value:t.valueWei||"0" }); });
   });
   LAST_TASK_KEYS=rows.map(r=>r.key);
@@ -646,9 +646,9 @@ function renderTasks(){
       <td><span class="pill ${modeCls}">${r.mode}${r.seadrop?" · seadrop":""}</span></td>
       <td>${taskStatusHTML(r)}</td>
       <td class="acts" style="justify-content:flex-end">
-        <button class="icon" title="Start" onclick="taskAction(${r.taskId},'start')">${IC.play}</button>
-        <button class="icon" title="Stop" onclick="taskAction(${r.taskId},'stop')">${IC.stop}</button>
-        <button class="icon" title="Boost" onclick="taskAction(${r.taskId},'boost')">${IC.boost}</button>
+        <button class="icon" title="Run this wallet" onclick="taskAction(${r.taskId},'start',${r.walletId})">${IC.play}</button>
+        <button class="icon" title="Stop this wallet" onclick="taskAction(${r.taskId},'stop',${r.walletId})">${IC.stop}</button>
+        <button class="icon" title="Boost (whole task)" onclick="taskAction(${r.taskId},'boost')">${IC.boost}</button>
         <button class="icon" title="Edit task" onclick="openTaskEdit(${r.taskId})">${IC.edit}</button>
         <button class="icon danger" title="Delete task" onclick="delTask(${r.taskId})">${IC.trash}</button>
       </td></tr>`;
@@ -667,10 +667,15 @@ function toggleTaskRow(key,on){ on?TASK_SEL.add(key):TASK_SEL.delete(key); rende
 function taskSelectAll(on){ TASK_SEL.clear(); if(on) LAST_TASK_KEYS.forEach(k=>TASK_SEL.add(k)); renderTasks(); }
 // Bulk actions on the DISTINCT tasks behind the selected wallet rows (red-box toolbar).
 async function bulkTask(action){
-  const ids=distinctTaskIds(); if(!ids.length) return toast("Select task rows first","info");
-  const n=TASK_SEL.size;  // report the user's selection (rows = tasks), not the config count
-  let ok=0; for(const id of ids){ try{ await api(`/tasks/${id}/${action}`,{method:"POST"}); ok++; }catch{} }
-  toast(ok?`${action} → ${n} task(s)`:`${action} failed`, ok?"success":"error");
+  const keys=[...TASK_SEL]; if(!keys.length) return toast("Select task rows first","info");
+  const n=keys.length;
+  let ok=0;
+  if(action==="boost"){ // boost rebroadcasts pending tx — whole task
+    for(const id of distinctTaskIds()){ try{ await api(`/tasks/${id}/boost`,{method:"POST"}); ok++; }catch{} }
+  }else{ // start/stop only the selected wallets (not the whole task)
+    for(const k of keys){ const [tid,wid]=k.split(":"); try{ await api(`/tasks/${tid}/${action}?wallet=${wid}`,{method:"POST"}); ok++; }catch{} }
+  }
+  toast(ok?`${action} → ${n} wallet(s)`:`${action} failed`, ok?"success":"error");
 }
 async function bulkDeleteTasks(){
   const ids=distinctTaskIds(); if(!ids.length) return;
@@ -723,7 +728,7 @@ async function applyMassEdit(){
 async function deleteGroupTasks(){ const ids=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).map(t=>t.id); if(!ids.length) return; if(!await confirmDialog(`Delete all ${ids.length} task(s) in ${CUR_GROUP}?`,"Delete")) return; for(const id of ids){ await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); } loadTasks(); toast("Tasks deleted","info"); }
 function pickGroup(g){ CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); }
 async function newGroup(){ const g=await promptDialog("New Group","Group name"); if(g){ TASK_GROUPS.add(g); saveGroups(); CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); } }
-async function taskAction(id,action){ try{ await api(`/tasks/${id}/${action}`,{method:"POST"}); if(action==="boost") toast("Boost — rebroadcasting pending tx with higher gas (same nonce)","info"); }catch(e){toast(e.message,"error");} }
+async function taskAction(id,action,walletId){ const q=walletId?`?wallet=${walletId}`:""; try{ await api(`/tasks/${id}/${action}${q}`,{method:"POST"}); if(action==="boost") toast("Boost — rebroadcasting pending tx with higher gas (same nonce)","info"); }catch(e){toast(e.message,"error");} }
 async function delTask(id){ if(await confirmDialog("Delete task?","Delete")){ await api("/tasks/"+id,{method:"DELETE"}); loadTasks(); toast("Task deleted","info"); } }
 async function startGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/start`,{method:"POST"}); }catch(e){toast(e.message,"error");} }
 async function stopGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/stop`,{method:"POST"}); }catch(e){toast(e.message,"error");} }
@@ -884,7 +889,7 @@ function gasParams(){ const mode=$("tGasMode").value; const g={mode};
   if($("tGasLimit").value)g.gasLimit=Number($("tGasLimit").value); return g; }
 function resetTaskForm(){
   ["tContract","tFn","tRawHex","tParams","tMaxFee","tPrio","tGasLimit","tNonce","tStartAt","tAbi"].forEach(id=>$(id)&&($(id).value=""));
-  ABI_FNS=[]; if($("abiBlock"))$("abiBlock").classList.add("hide"); if($("abiFnFld"))$("abiFnFld").classList.add("hide"); if($("tAbiFn"))$("tAbiFn").innerHTML=""; if($("tParams"))$("tParams").placeholder="param1;param2  ({address}=wallet)";
+  ABI_FNS=[]; if($("abiBlock"))$("abiBlock").classList.add("hide"); if($("abiFnFld"))$("abiFnFld").classList.add("hide"); if($("tAbiFn"))$("tAbiFn").innerHTML=""; if($("tParams"))$("tParams").placeholder="param1;param2  ({address}=wallet · {rand:1-10000}=random)";
   $("tValue").value="0"; $("tDelay").value=String(APP_CFG.defaultDelayMs||0);
   $("tHex").checked=false; toggleHex(); $("tMulti").value=APP_CFG.defaultMultiRpc?"true":"false"; $("tGasMode").value="auto"; $("tFlashbots").checked=false; if($("tProxyGroup")) $("tProxyGroup").value="";
   if($("tPostAction")) $("tPostAction").value="none"; if($("tPostDest")) $("tPostDest").value=""; if($("tPostDrain")) $("tPostDrain").checked=false; onPostActionChange();

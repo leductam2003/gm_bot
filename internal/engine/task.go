@@ -76,13 +76,14 @@ type WalletStatus struct {
 
 // TaskRuntime wraps a config with live status + cancellation.
 type TaskRuntime struct {
-	mu        sync.Mutex
-	Config    TaskConfig
-	Status    string // idle|running|stopped|done
-	Wallets   map[int64]*WalletStatus
-	proxies   []string // resolved once per run from Config.ProxyGroup; rotated per wallet
-	cancel    context.CancelFunc
-	pumpEpoch atomic.Int64
+	mu           sync.Mutex
+	Config       TaskConfig
+	Status       string // idle|running|stopped|done
+	Wallets      map[int64]*WalletStatus
+	proxies      []string                     // resolved once per run from Config.ProxyGroup; rotated per wallet
+	cancel       context.CancelFunc           // whole-task run
+	walletCancel map[int64]context.CancelFunc // per-wallet runs (one row's ▶ button)
+	pumpEpoch    atomic.Int64
 }
 
 func newRuntime(cfg TaskConfig) *TaskRuntime {

@@ -1,9 +1,11 @@
 package evm
 
 import (
+	crand "crypto/rand"
 	"fmt"
 	"math/big"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -72,7 +74,32 @@ func substituteWallet(s string, wallet common.Address) string {
 	s = strings.TrimSpace(s)
 	s = strings.ReplaceAll(s, "{address}", wallet.Hex())
 	s = strings.ReplaceAll(s, "{wallet}", wallet.Hex())
+	s = substituteRandom(s)
 	return s
+}
+
+// randRe matches {rand:LO-HI} / {random:LO-HI} — a random integer in [LO,HI] (inclusive),
+// re-rolled every time calldata is built (each send), e.g. to scan token IDs.
+var randRe = regexp.MustCompile(`\{rand(?:om)?:(\d+)-(\d+)\}`)
+
+func substituteRandom(s string) string {
+	return randRe.ReplaceAllStringFunc(s, func(tok string) string {
+		m := randRe.FindStringSubmatch(tok)
+		lo, ok1 := new(big.Int).SetString(m[1], 10)
+		hi, ok2 := new(big.Int).SetString(m[2], 10)
+		if !ok1 || !ok2 {
+			return tok
+		}
+		if lo.Cmp(hi) > 0 {
+			lo, hi = hi, lo
+		}
+		span := new(big.Int).Add(new(big.Int).Sub(hi, lo), big.NewInt(1)) // inclusive range
+		n, err := crand.Int(crand.Reader, span)
+		if err != nil {
+			return tok
+		}
+		return new(big.Int).Add(lo, n).String()
+	})
 }
 
 // parseSignature splits "mint(uint256 qty, address to)" -> ("mint", [uint256, address]).

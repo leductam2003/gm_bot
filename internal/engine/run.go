@@ -51,6 +51,101 @@ func (e *Engine) Start(id int64) error {
 	return nil
 }
 
+// RunWallet runs a SINGLE wallet of a task (the per-row ▶ button), independent of the
+// whole task — so clicking run on one wallet doesn't fire all of them. Spam mode loops
+// that one wallet until StopWallet; other modes do one pass.
+func (e *Engine) RunWallet(taskID, walletID int64) error {
+	e.mu.Lock()
+	rt := e.tasks[taskID]
+	e.mu.Unlock()
+	if rt == nil {
+		return ErrNotFound
+	}
+	rt.mu.Lock()
+	cfg := rt.Config
+	if rt.walletCancel == nil {
+		rt.walletCancel = map[int64]context.CancelFunc{}
+	}
+	if _, busy := rt.walletCancel[walletID]; busy {
+		rt.mu.Unlock()
+		return ErrRunning
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rt.walletCancel[walletID] = cancel
+	if cfg.ProxyGroup != "" && len(rt.proxies) == 0 {
+		if ps, perr := e.st.ListProxiesByGroup(cfg.ProxyGroup); perr == nil {
+			for _, p := range ps {
+				rt.proxies = append(rt.proxies, p.URL)
+			}
+		}
+	}
+	rt.mu.Unlock()
+
+	one := cfg
+	one.WalletIDs = []int64{walletID}
+	wallets, err := e.loadWallets(one)
+	if err != nil || len(wallets) == 0 {
+		e.dropWalletCancel(rt, walletID)
+		if err == nil {
+			err = errors.New("wallet not found")
+		}
+		return err
+	}
+	value := parseBigOr0(cfg.ValueWei)
+	go func() {
+		defer zeroKeys(wallets)
+		defer e.dropWalletCancel(rt, walletID)
+		lw := wallets[0]
+		if cfg.Mode == ModeSpam {
+			for ctx.Err() == nil {
+				e.runOne(ctx, rt, cfg, value, evm.ResolvedFees{}, lw)
+				if cfg.DelayMs > 0 {
+					sleepCtx(ctx, time.Duration(cfg.DelayMs)*time.Millisecond)
+				}
+			}
+		} else {
+			e.runOne(ctx, rt, cfg, value, evm.ResolvedFees{}, lw)
+		}
+		if ctx.Err() != nil {
+			rt.setWallet(walletID, func(w *WalletStatus) {
+				if w.Status == "running" {
+					w.Status = "stopped"
+				}
+			})
+		}
+		e.emit(rt)
+	}()
+	return nil
+}
+
+// StopWallet cancels a single in-flight per-wallet run.
+func (e *Engine) StopWallet(taskID, walletID int64) {
+	e.mu.Lock()
+	rt := e.tasks[taskID]
+	e.mu.Unlock()
+	if rt == nil {
+		return
+	}
+	e.dropWalletCancel(rt, walletID)
+	rt.setWallet(walletID, func(w *WalletStatus) {
+		if w.Status == "running" {
+			w.Status = "stopped"
+		}
+	})
+	e.emit(rt)
+}
+
+func (e *Engine) dropWalletCancel(rt *TaskRuntime, walletID int64) {
+	rt.mu.Lock()
+	if rt.walletCancel != nil {
+		if c := rt.walletCancel[walletID]; c != nil {
+			c()
+		}
+		delete(rt.walletCancel, walletID)
+	}
+	rt.mu.Unlock()
+}
+
 func (e *Engine) runTask(ctx context.Context, rt *TaskRuntime, cfg TaskConfig) {
 	_ = e.st.UpdateTaskStatus(cfg.ID, "running")
 	e.log.Task(logger.INFO, "task started", cfg.ID, map[string]any{"mode": cfg.Mode})
