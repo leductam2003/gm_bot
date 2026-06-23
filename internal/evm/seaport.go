@@ -86,18 +86,28 @@ type Listing struct {
 	Protocol   string                 `json:"protocol_address"`
 }
 
+// OrderZone carries the zone enforcement a collection requires. Zero value = an OPEN
+// order (orderType 0, no zone). Collections with Signed Zone V2 / enforced royalties
+// need OrderType 2 (FULL_RESTRICTED) or 3 and a Zone address — copy these from one of
+// the collection's existing OpenSea listings.
+type OrderZone struct {
+	Zone      string // hex address; "" = none (0x0)
+	OrderType int    // 0 OPEN, 2 FULL_RESTRICTED, 3 PARTIAL_RESTRICTED
+	ZoneHash  string // hex bytes32; "" = 0x0
+}
+
 // BuildAndSignListing constructs a Seaport listing order (sell 1 ERC721 for ETH),
 // signs it EIP-712 with the owner key, and returns the OpenSea-ready payload.
-// Pure given (counter, fees, now, salt) — port of zyper-mac/src/listing.ts buildOrder.
+// Pure given (counter, fees, now, salt, zone) — port of zyper-mac/src/listing.ts buildOrder.
 func BuildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
-	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int) (Listing, error) {
-	lst, _, err := buildAndSignListing(key, chainID, counter, nft, tokenID, priceWei, fees, durationSec, now, salt)
+	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, z OrderZone) (Listing, error) {
+	lst, _, err := buildAndSignListing(key, chainID, counter, nft, tokenID, priceWei, fees, durationSec, now, salt, z)
 	return lst, err
 }
 
 // buildAndSignListing also returns the EIP-712 digest (for tests).
 func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
-	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int) (Listing, []byte, error) {
+	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, z OrderZone) (Listing, []byte, error) {
 
 	offerer := gethcrypto.PubkeyToAddress(key.PublicKey)
 	startTime := big.NewInt(now)
@@ -129,6 +139,18 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 	zero := "0"
 	native := common.HexToAddress(zeroAddr).Hex()
 
+	// Zone / orderType / zoneHash: default OPEN (0, no zone). A restricted order carries
+	// the collection's zone so OpenSea accepts Signed-Zone-V2 enforced listings.
+	zoneHex := common.HexToAddress(zeroAddr).Hex()
+	if common.IsHexAddress(z.Zone) {
+		zoneHex = common.HexToAddress(z.Zone).Hex()
+	}
+	zoneHashHex := zeroBytes32
+	if z.ZoneHash != "" {
+		zoneHashHex = z.ZoneHash
+	}
+	orderTypeStr := fmt.Sprintf("%d", z.OrderType)
+
 	// EIP-712 message arrays (apitypes wants strings for ints, hex for addresses).
 	offer := []interface{}{map[string]interface{}{
 		"itemType": "2", "token": nft.Hex(), "identifierOrCriteria": tokenID.String(),
@@ -146,10 +168,10 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 	}
 
 	message := apitypes.TypedDataMessage{
-		"offerer": offerer.Hex(), "zone": common.HexToAddress(zeroAddr).Hex(),
+		"offerer": offerer.Hex(), "zone": zoneHex,
 		"offer": offer, "consideration": consMsg,
-		"orderType": "0", "startTime": startTime.String(), "endTime": endTime.String(),
-		"zoneHash": zeroBytes32, "salt": salt.String(), "conduitKey": OSConduitKey, "counter": counter.String(),
+		"orderType": orderTypeStr, "startTime": startTime.String(), "endTime": endTime.String(),
+		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": OSConduitKey, "counter": counter.String(),
 	}
 
 	td := apitypes.TypedData{
@@ -198,10 +220,10 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 
 	// OpenSea order parameters (string values; includes totalOriginalConsiderationItems).
 	params := map[string]interface{}{
-		"offerer": offerer.Hex(), "zone": common.HexToAddress(zeroAddr).Hex(),
-		"offer": offer, "consideration": consMsg, "orderType": 0,
+		"offerer": offerer.Hex(), "zone": zoneHex,
+		"offer": offer, "consideration": consMsg, "orderType": z.OrderType,
 		"startTime": startTime.String(), "endTime": endTime.String(),
-		"zoneHash": zeroBytes32, "salt": salt.String(), "conduitKey": OSConduitKey,
+		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": OSConduitKey,
 		"totalOriginalConsiderationItems": len(consMsg), "counter": counter.String(),
 	}
 	return Listing{Parameters: params, Signature: hexutil.Encode(sig), Protocol: Seaport16}, digest, nil

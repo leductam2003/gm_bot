@@ -123,7 +123,7 @@ func TestBuildAndSignListing(t *testing.T) {
 	fees := []Fee{{Recipient: "0x0000a26b00c1F0DF003000390027140000fAa719", Bps: 250}} // 2.5%
 	salt := big.NewInt(12345)
 
-	lst, digest, err := buildAndSignListing(key, 1, big.NewInt(0), nft, big.NewInt(2102), price, fees, 30*86400, 1782000000, salt)
+	lst, digest, err := buildAndSignListing(key, 1, big.NewInt(0), nft, big.NewInt(2102), price, fees, 30*86400, 1782000000, salt, OrderZone{})
 	if err != nil {
 		t.Fatal(err)
 	}

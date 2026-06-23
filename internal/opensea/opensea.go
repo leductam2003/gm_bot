@@ -198,6 +198,46 @@ func (c *Client) Floor(ctx context.Context, slug string) (float64, error) {
 	return r.Total.FloorPrice, nil
 }
 
+// OrderTemplate fetches an existing OpenSea listing for the collection and returns the
+// zone / orderType / zoneHash it uses, so new listings match the collection's enforcement
+// (e.g. Signed Zone V2 needs orderType 2 + a zone). ok=false if none found (treat as OPEN).
+func (c *Client) OrderTemplate(ctx context.Context, slug, contract string) (zone string, orderType int, zoneHash string, ok bool) {
+	if slug == "" {
+		return "", 0, "", false
+	}
+	body, _, err := c.get(ctx, "/listings/collection/"+slug+"/all?limit=20")
+	if err != nil {
+		return "", 0, "", false
+	}
+	var r struct {
+		Listings []struct {
+			ProtocolData struct {
+				Parameters struct {
+					Zone      string `json:"zone"`
+					OrderType int    `json:"orderType"`
+					ZoneHash  string `json:"zoneHash"`
+					Offer     []struct {
+						Token string `json:"token"`
+					} `json:"offer"`
+				} `json:"parameters"`
+			} `json:"protocol_data"`
+		} `json:"listings"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return "", 0, "", false
+	}
+	lc := strings.ToLower(contract)
+	for _, l := range r.Listings {
+		p := l.ProtocolData.Parameters
+		for _, o := range p.Offer {
+			if strings.ToLower(o.Token) == lc {
+				return p.Zone, p.OrderType, p.ZoneHash, true
+			}
+		}
+	}
+	return "", 0, "", false
+}
+
 // PostListing submits a signed Seaport listing to OpenSea.
 func (c *Client) PostListing(ctx context.Context, chain string, listing any) error {
 	_, _, err := c.post(ctx, "/orders/"+chain+"/seaport/listings", listing)

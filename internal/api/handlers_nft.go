@@ -621,6 +621,12 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	for _, f := range osFees {
 		fees = append(fees, evm.Fee{Recipient: f.Recipient, Bps: f.Bps})
 	}
+	// Match the collection's enforcement (Signed Zone V2 needs orderType 2 + a zone) by
+	// copying the zone/orderType from one of its existing OpenSea listings; else OPEN.
+	zone := evm.OrderZone{}
+	if z, ot, zh, ok := s.osc.OrderTemplate(r.Context(), slug, body.ContractAddress); ok {
+		zone = evm.OrderZone{Zone: z, OrderType: ot, ZoneHash: zh}
+	}
 
 	type listItem struct {
 		tokenID string
@@ -685,7 +691,7 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 				keepErr("bad token id " + li.tokenID)
 				continue
 			}
-			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt())
+			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt(), zone)
 			if berr != nil {
 				failed++
 				keepErr("sign: " + berr.Error())
