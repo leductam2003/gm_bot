@@ -269,16 +269,63 @@ async function loadChains() {
   ["balChain","rpcChain","tChain","nftChain","walSendChain","meChain"].forEach((id)=>{ if($(id)) $(id).innerHTML = opts; });
 }
 
-// ---------- home ----------
+// ---------- home / dashboard ----------
+let HOME=null, PNL_UNIT="eth", HOME_WLABELS={};
+function escHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function shortAddr(a){ a=String(a||""); return a.length>12 ? a.slice(0,6)+"…"+a.slice(-4) : a; }
+function weiToEthNum(wei){ try{ return Number(BigInt(String(wei||"0")))/1e18; }catch{ return 0; } }
+function txExplorerUrl(chainId, hash){ if(!hash) return ""; const c=(CHAINS||[]).find(c=>c.id===chainId); return (c&&c.explorer)? c.explorer.replace(/\/+$/,"")+"/tx/"+hash : ""; }
+function fmtPnlEth(eth){ const sign=eth>0?"+":(eth<0?"−":""); return `${sign}${Math.abs(eth).toLocaleString(undefined,{maximumFractionDigits:4})} Ξ`; }
+function fmtPnlUsd(eth){ const u=(HOME&&HOME.ethUsd)||0; const v=eth*u; const sign=v>0?"+":(v<0?"−":""); return `${sign}$${Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:2})}`; }
+function fmtPnl(eth){ return PNL_UNIT==="usd" ? fmtPnlUsd(eth) : fmtPnlEth(eth); }
+function pnlClass(eth){ return eth>0?"pos":(eth<0?"neg":""); }
+
 async function loadHome() {
-  const [ws, ts, rpc, tg] = await Promise.all([api("/wallets"), api("/tasks"), api("/rpc"), api("/telegram").catch(()=>({running:false}))]);
+  const [home, ws, ts, rpc, tg] = await Promise.all([
+    api("/home").catch(()=>null), api("/wallets"), api("/tasks"), api("/rpc"), api("/telegram").catch(()=>({running:false})),
+  ]);
+  HOME = home;
+  HOME_WLABELS = {}; (ws||[]).forEach(w=>{ HOME_WLABELS[w.id]={label:w.label||("wallet-"+w.id), address:w.address}; });
   const card = (t,v,s)=>`<div class="card"><h2>${t}</h2><div style="font-size:26px;font-weight:700">${v}</div><div class="muted">${s||""}</div></div>`;
   $("homeCards").innerHTML =
     card("Wallets", ws.length, "stored") +
     card("Tasks", ts.length, ts.filter(t=>t.status==="running").length + " running") +
     card("RPC", rpc.length, "endpoints") +
     card("Telegram", tg.running ? "Live" : "Off", "remote control");
+  renderHome();
 }
+function setPnlUnit(u){ PNL_UNIT=u; $("pnlEth").classList.toggle("seg-on",u==="eth"); $("pnlUsd").classList.toggle("seg-on",u==="usd"); renderPnl(); }
+function renderPnl(){
+  const eth = HOME ? weiToEthNum(HOME.pnlWei) : 0;
+  const el = $("pnlValue"); if(el){ el.textContent = fmtPnl(eth); el.className = "pnl-value "+pnlClass(eth); }
+  const plays = (HOME && HOME.topPlays) || [];
+  const box = $("topPlays"); if(!box) return;
+  box.innerHTML = plays.length ? plays.slice(0,8).map(p=>{
+    const e = weiToEthNum(p.realizedWei);
+    return `<div class="play-row"><span class="play-name">${escHtml(p.collection||p.contract)}</span><span class="${pnlClass(e)||'muted'}">${fmtPnl(e)}</span></div>`;
+  }).join("") : `<div class="muted" style="padding:6px 0">No sales yet — realized PNL appears after you sell (Accept Offers).</div>`;
+}
+function renderHome(){
+  renderPnl();
+  $("mintedN").innerHTML = `&#10003; ${(HOME&&HOME.minted)||0} minted`;
+  $("failedN").innerHTML = `&#10007; ${(HOME&&HOME.failed)||0} failed`;
+  const rows = (HOME && HOME.activity) || [];
+  $("actRows").innerHTML = rows.length ? rows.map(m=>{
+    const t = new Date(m.ts).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+    const wl = HOME_WLABELS[m.walletId] || {label:"wallet", address:m.address};
+    const tok = m.tokenId ? ("#"+escHtml(m.tokenId)) : "—";
+    const url = txExplorerUrl(m.chainId, m.txHash);
+    const act = url ? `<a href="${url}" target="_blank" rel="noopener" class="tx-link">View Transaction &#8599;</a>` : `<span class="muted">—</span>`;
+    return `<tr><td class="act-time">${t}</td><td><b>${escHtml(wl.label)}</b><div class="act-addr">${shortAddr(m.address||wl.address)}</div></td><td class="act-tok">${tok}</td><td>${act}</td></tr>`;
+  }).join("") : `<tr><td colspan="4" class="act-empty">No mints yet — run a task and successful mints show up here.</td></tr>`;
+}
+async function resetHome(){
+  if(!await confirmDialog("Reset all PNL + activity history?\nThis clears every recorded mint and sale.","Reset")) return;
+  try{ await api("/home/reset",{method:"POST"}); toast("Stats reset","success"); loadHome(); }catch(e){ toast(e.message,"error"); }
+}
+// Live-refresh the dashboard (throttled) when it's the open tab and a task/sale event lands.
+let homeRefreshT=null;
+function homeMaybeRefresh(){ const el=$("tab-home"); if(!el||el.classList.contains("hide"))return; clearTimeout(homeRefreshT); homeRefreshT=setTimeout(loadHome,1500); }
 
 // ---------- wallets ----------
 let WSEL = new Set(), SEND_WID = null;
@@ -1208,6 +1255,43 @@ async function nftCancel(){
     toast(`Cancelling ${r.cancelled||0} wallet(s)' listings on-chain — refresh in a moment`,"info"); setTimeout(nftLoad,3000);
   }catch(e){ toast(e.message,"error"); }
 }
+// Accept Offers → sells each selected NFT into the best active collection offer (paid in
+// WETH). Each accept is eth_call-simulated server-side before broadcast, so a doomed tx
+// never burns gas. Results stream over the WS ("accept" event).
+let ACCEPT_RUN=null;
+async function nftAccept(){
+  const sel=nftSelected(); if(!sel.length) return toast("Select NFTs first","info");
+  const wallets=new Set(sel.map(it=>it.walletId)).size;
+  const minEth=await promptDialog(
+    `Accept the BEST offer on ${sel.length} NFT(s) across ${wallets} wallet(s).\nThis SELLS them for WETH. Minimum price in ETH (0 = accept any):`,
+    "0","Accept offers","0");
+  if(minEth===null) return; // cancelled
+  const e=Number(minEth); if(isNaN(e)||e<0) return toast("Invalid minimum price","error");
+  const minPriceWei = e>0 ? ethToWeiStr(String(minEth)) : "";
+  const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
+  const runId=newRunId();
+  ACCEPT_RUN={ id:runId, total:sel.length, done:0, ok:0, fail:0, approve:0, skip:0 };
+  try{
+    await api("/nft/accept",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,runId,minPriceWei,
+      items:sel.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
+    toast(`Accepting offers on ${sel.length} NFT(s)… each is simulated first (safe).`,"info");
+  }catch(err){ ACCEPT_RUN=null; toast(err.message,"error"); }
+}
+function nftOnAccept(d){
+  const r=ACCEPT_RUN; if(!r||d.runId!==r.id) return;
+  r.done++;
+  if(d.txHash && !d.error) r.ok++;
+  else if(d.needApproval) r.approve++;
+  else if(d.skipped) r.skip++;
+  else if(d.error) r.fail++;
+  if(r.done<r.total){ toast(`Accepting… ${r.done}/${r.total} · ${r.ok} sold`,"info"); return; }
+  let msg=`Accepted ${r.ok}/${r.total}`;
+  if(r.approve) msg+=` · ${r.approve} need approval (auto-sent — retry in ~30s)`;
+  if(r.skip) msg+=` · ${r.skip} below min`;
+  if(r.fail) msg+=` · ${r.fail} failed`;
+  toast(msg, (r.ok? "success":"error"));
+  ACCEPT_RUN=null; setTimeout(nftLoad,3000);
+}
 // SeaDrop mint via the NFT tab was removed — create mint tasks from the Tasks tab
 // (paste an OpenSea link) instead. nftResolve/nftCreateMint kept as internal helpers.
 async function nftResolve(){
@@ -1405,11 +1489,16 @@ async function saveTelegram(){
 
 // ---------- logs ----------
 function logMatches(e){ const cat=$("logCat").value, lvl=$("logLevel").value; return (!cat||e.category===cat)&&(!lvl||e.level===lvl); }
+function fmtLogFields(f){
+  if(!f||typeof f!=="object") return "";
+  const parts=Object.entries(f).map(([k,v])=>`${k}=${(v&&typeof v==="object")?JSON.stringify(v):v}`);
+  return parts.length?" · "+parts.join(" "):"";
+}
 function appendLog(e){ if(!logMatches(e))return;
   const div=document.createElement("div"); div.className="logline";
   div.style.color=(e.level==="ERROR"||e.level==="WARN")?"var(--danger)":"var(--muted)";
   const t=new Date(e.time).toLocaleTimeString();
-  div.textContent=`${t} [${e.level}] ${e.category}${e.taskId?" #"+e.taskId:""} ${e.wallet?e.wallet+" ":""}${e.msg}`;
+  div.textContent=`${t} [${e.level}] ${e.category}${e.taskId?" #"+e.taskId:""} ${e.wallet?e.wallet+" ":""}${e.msg}${fmtLogFields(e.fields)}`;
   const box=$("logstream"); box.appendChild(div); while(box.childElementCount>2000)box.removeChild(box.firstChild);
   if($("logAutoscroll").checked)box.scrollTop=box.scrollHeight;
 }
@@ -1426,8 +1515,9 @@ function connectWS(){
   ws.onopen=()=>{ $("wsState").textContent="live"; $("wsState").style.color="var(--accent)"; setOffline(false); if(!CHAINS.length) bootData().catch(()=>{}); };
   ws.onclose=()=>{ $("wsState").textContent="offline"; $("wsState").style.color="var(--danger)"; setTimeout(connectWS,2000); };
   ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;}
-    if(m.type==="task"){ TASKS[m.data.id]=m.data; renderTasks(); }
+    if(m.type==="task"){ TASKS[m.data.id]=m.data; renderTasks(); homeMaybeRefresh(); }
     else if(m.type==="log"){ appendLog(m.data); }
+    else if(m.type==="accept"){ nftOnAccept(m.data); homeMaybeRefresh(); }
     else if(m.type==="whitelist"){ wlOnResult(m.data); }
     else if(m.type==="funds"){ fundsOnResult(m.data); }
     else if(m.type==="nft"){ nftOnResult(m.data); }

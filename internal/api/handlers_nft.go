@@ -22,6 +22,7 @@ import (
 	"zyperbot/internal/evm"
 	"zyperbot/internal/opensea"
 	"zyperbot/internal/logger"
+	"zyperbot/internal/store"
 )
 
 // walletKey decrypts a wallet's private key via the vault (caller must wipe it).
@@ -411,6 +412,9 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 		res.Total = req.total
 		s.hub.Publish("nft", res)
 	}
+	s.log.API(logger.INFO, "nft fetch started", map[string]any{"wallets": req.total, "contract": req.contract, "threads": req.threads})
+	var lastErrMu sync.Mutex
+	lastErr := ""
 	slug, _ := s.osc.ContractSlug(ctx, req.chainSlug, req.contract)
 
 	// One opensea client per proxy URL (reused), so wallets spread across IPs.
@@ -468,6 +472,9 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 					mu.Lock()
 					next = append(next, i) // retry this wallet next round
 					mu.Unlock()
+					lastErrMu.Lock()
+					lastErr = err.Error()
+					lastErrMu.Unlock()
 					return
 				}
 				listed := osc.MakerListedTokenIDs(ctx, req.chainSlug, slug, sw.addr, req.contract)
@@ -488,6 +495,18 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 		pending = next
 	}
 	pub(nftStreamResult{Done: true, Failed: len(pending), Slug: slug})
+	failed := len(pending)
+	fields := map[string]any{"fetched": req.total - failed, "failed": failed, "wallets": req.total}
+	if failed > 0 {
+		lastErrMu.Lock()
+		if lastErr != "" {
+			fields["lastError"] = lastErr
+		}
+		lastErrMu.Unlock()
+		s.log.API(logger.WARN, "nft fetch finished with failures", fields)
+	} else {
+		s.log.API(logger.INFO, "nft fetch complete", fields)
+	}
 }
 
 // POST /api/nft/floor {chainId, contractAddress, slug?} — collection floor price (ETH).
@@ -746,6 +765,193 @@ func (s *Server) handleNftCancel(w http.ResponseWriter, r *http.Request) {
 		"cancelled": created,
 		"note":      "running incrementCounter per wallet — cancels ALL that wallet's open Seaport listings on-chain",
 	})
+}
+
+// acceptResult is one streamed accept-offer outcome (WS "accept" event).
+type acceptResult struct {
+	RunID        string `json:"runId"`
+	Total        int    `json:"total"`
+	Index        int    `json:"index"`
+	From         string `json:"from,omitempty"`
+	TokenID      string `json:"tokenId,omitempty"`
+	PriceWei     string `json:"priceWei,omitempty"`
+	TxHash       string `json:"txHash,omitempty"`
+	Error        string `json:"error,omitempty"`
+	NeedApproval bool   `json:"needApproval,omitempty"`
+	Skipped      bool   `json:"skipped,omitempty"`
+}
+
+// POST /api/nft/accept {chainId, contractAddress, runId, minPriceWei?, items:[{walletId,tokenId}]}
+// Accepts the best active collection offer for each selected NFT and streams results over
+// the WS ("accept" event). SAFE BY DESIGN: every accept is eth_call-simulated first and
+// only broadcast if it would succeed, so a doomed tx never burns gas. The OpenSea conduit
+// must be approved — when it isn't, the one-time approval is auto-run (accept again once it
+// mines). Offers are paid in WETH, so the proceeds land as WETH in the seller's wallet.
+func (s *Server) handleNftAccept(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChainID         int    `json:"chainId"`
+		ContractAddress string `json:"contractAddress"`
+		RunID           string `json:"runId"`
+		MinPriceWei     string `json:"minPriceWei"`
+		Items           []struct {
+			WalletID int64  `json:"walletId"`
+			TokenID  string `json:"tokenId"`
+		} `json:"items"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if !common.IsHexAddress(body.ContractAddress) {
+		writeErr(w, http.StatusBadRequest, "invalid contract")
+		return
+	}
+	if body.ChainID == 0 {
+		body.ChainID = 1
+	}
+	chainSlug, err := chains.SlugFromChainID(body.ChainID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
+		return
+	}
+	contract := common.HexToAddress(body.ContractAddress)
+	nodes, err := s.nodesForChain(r, body.ChainID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	client := nodes[0].Client
+	fees, err := evm.ResolveFees(r.Context(), client, autoGas())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "gas: "+err.Error())
+		return
+	}
+	slug, _ := s.osc.ContractSlug(r.Context(), chainSlug, body.ContractAddress)
+	if slug == "" {
+		writeErr(w, http.StatusBadGateway, "collection not found on OpenSea")
+		return
+	}
+	var minPrice *big.Int
+	if mp := strings.TrimSpace(body.MinPriceWei); mp != "" {
+		minPrice, _ = new(big.Int).SetString(mp, 10)
+	}
+	collName := slug // collection display name for the Home "TOP PLAYS" breakdown
+	if ci, cerr := s.osc.Collection(r.Context(), slug); cerr == nil && ci.Name != "" {
+		collName = ci.Name
+	}
+
+	items := body.Items
+	writeJSON(w, http.StatusOK, map[string]any{"runId": body.RunID, "total": len(items)})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		total := len(items)
+		pub := func(res acceptResult) {
+			res.RunID = body.RunID
+			res.Total = total
+			s.hub.Publish("accept", res)
+		}
+		for i, it := range items {
+			if ctx.Err() != nil {
+				return
+			}
+			res := acceptResult{Index: i, TokenID: it.TokenID}
+			func() {
+				key, owner, kerr := s.walletKey(it.WalletID)
+				if kerr != nil {
+					res.Error = "wallet: " + kerr.Error()
+					return
+				}
+				defer wipeECDSA(key)
+				res.From = owner.Hex()
+
+				// One-time conduit approval (the NFT moves through the OpenSea conduit).
+				if approved, _ := evm.IsApprovedForConduit(ctx, client, contract, owner); !approved {
+					id, _ := s.eng.Create(engine.TaskConfig{
+						Group: "NFT-Approve", ChainID: body.ChainID, ContractAddress: contract.Hex(),
+						Mode: engine.ModeAction, FunctionSig: "setApprovalForAll(address,bool)",
+						Params: []string{evm.OSConduit, "true"}, Gas: autoGas(), WalletIDs: []int64{it.WalletID},
+					})
+					if id != 0 {
+						_ = s.eng.Start(id)
+					}
+					res.Error = "approval sent — accept again once it mines"
+					res.NeedApproval = true
+					return
+				}
+
+				off, ok := s.osc.BestOffer(ctx, slug)
+				if !ok {
+					res.Error = "no active offers on this collection"
+					return
+				}
+				res.PriceWei = off.PriceWei
+				if minPrice != nil {
+					if v, ok := new(big.Int).SetString(off.PriceWei, 10); ok && v.Cmp(minPrice) < 0 {
+						res.Error = "best offer below your minimum"
+						res.Skipped = true
+						return
+					}
+				}
+				to, fn, input, ferr := s.osc.OfferFulfillment(ctx, off, owner.Hex(), contract.Hex(), it.TokenID)
+				if ferr != nil {
+					res.Error = "fulfillment: " + ferr.Error()
+					return
+				}
+				if !strings.HasPrefix(fn, "matchAdvancedOrders") {
+					res.Error = "unsupported offer type (" + fn + ") — accept this one on OpenSea"
+					return
+				}
+				data, berr := evm.BuildAcceptCalldata(input)
+				if berr != nil {
+					res.Error = "encode: " + berr.Error()
+					return
+				}
+				toAddr := common.HexToAddress(to)
+				// Safety: simulate first; never broadcast a tx that would revert.
+				if serr := evm.SimulateTx(ctx, client, owner, toAddr, big.NewInt(0), data); serr != nil {
+					res.Error = "would fail: " + serr.Error()
+					return
+				}
+				g, ge := evm.EstimateGas(ctx, client, owner, toAddr, data, big.NewInt(0))
+				if ge != nil {
+					res.Error = "estimate gas: " + ge.Error()
+					return
+				}
+				gas := g + g/4
+				nonce, nerr := client.PendingNonceAt(ctx, owner)
+				if nerr != nil {
+					res.Error = "nonce: " + nerr.Error()
+					return
+				}
+				hash, txerr := s.signAndBroadcast(ctx, key, body.ChainID, nonce, toAddr, big.NewInt(0), data, gas, fees, nodes)
+				res.TxHash = hash
+				if txerr != nil {
+					res.Error = txerr.Error()
+					return
+				}
+				s.log.Tx(logger.INFO, "accept-offer", 0, owner.Hex(), map[string]any{"token": it.TokenID, "priceWei": off.PriceWei, "txHash": hash})
+				// Realized sale for the Home PNL: proceeds minus the matched mint cost.
+				cost := s.st.MatchMintCost(body.ChainID, contract.Hex(), it.TokenID, owner.Hex())
+				_, _ = s.st.AddSale(store.Sale{
+					Ts: time.Now(), ChainID: body.ChainID, Contract: contract.Hex(), Collection: collName,
+					TokenID: it.TokenID, WalletID: it.WalletID, Address: owner.Hex(), TxHash: hash,
+					ProceedsWei: off.PriceWei, CostWei: cost,
+				})
+			}()
+			switch { // surface non-success outcomes in the Logs tab (success logged above)
+			case res.TxHash != "" && res.Error == "":
+			case res.NeedApproval:
+				s.log.API(logger.INFO, "accept-offer: conduit approval sent", map[string]any{"token": res.TokenID, "wallet": res.From})
+			case res.Skipped:
+				s.log.API(logger.INFO, "accept-offer skipped: offer below minimum", map[string]any{"token": res.TokenID, "wallet": res.From, "priceWei": res.PriceWei})
+			case res.Error != "":
+				s.log.API(logger.WARN, "accept-offer failed", map[string]any{"token": res.TokenID, "wallet": res.From, "error": res.Error})
+			}
+			pub(res)
+		}
+	}()
 }
 
 // POST /api/nft/resolve {chainId, contractAddress} — read the live SeaDrop public drop.

@@ -21,6 +21,7 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"zyperbot/internal/chains"
+	"zyperbot/internal/logger"
 	"zyperbot/internal/store"
 )
 
@@ -114,6 +115,7 @@ func (s *Server) handleWhitelistCheck(w http.ResponseWriter, r *http.Request) {
 	if threads > 20 {
 		threads = 20 // OpenSea throttles hard — cap concurrency (use proxies to go wider)
 	}
+	s.log.API(logger.INFO, "whitelist check started", map[string]any{"slug": slug, "wallets": len(targets), "threads": threads})
 	sem := make(chan struct{}, threads)
 	var wg sync.WaitGroup
 	for i, wl := range targets {
@@ -127,6 +129,9 @@ func (s *Server) handleWhitelistCheck(w http.ResponseWriter, r *http.Request) {
 			// fills in row-by-row instead of waiting for the whole batch.
 			defer func() {
 				out[i] = res
+				if res.Error != "" {
+					s.log.API(logger.WARN, "whitelist wallet failed", map[string]any{"wallet": res.Address, "label": res.Label, "error": res.Error})
+				}
 				s.hub.Publish("whitelist", map[string]any{
 					"runId": body.RunID, "slug": slug, "total": len(targets),
 					"walletId": res.WalletID, "address": res.Address, "label": res.Label,
@@ -153,6 +158,18 @@ func (s *Server) handleWhitelistCheck(w http.ResponseWriter, r *http.Request) {
 		}(i, wl)
 	}
 	wg.Wait()
+	okN := 0
+	for _, res := range out {
+		if res.OK {
+			okN++
+		}
+	}
+	failN := len(out) - okN
+	lvl := logger.INFO
+	if failN > 0 {
+		lvl = logger.WARN
+	}
+	s.log.API(lvl, "whitelist check complete", map[string]any{"slug": slug, "eligible_checked": okN, "failed": failN, "wallets": len(targets)})
 	writeJSON(w, http.StatusOK, map[string]any{"slug": slug, "wallets": out})
 }
 

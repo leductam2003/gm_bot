@@ -426,6 +426,13 @@ func (s *Server) fundsPublisher(runID string, total int) func(fundResult) {
 	return func(res fundResult) {
 		res.RunID = runID
 		res.Total = total
+		if res.Error != "" { // every funds error (validation, fatal, broadcast) lands in the Logs tab
+			lvl := logger.WARN
+			if res.Fatal {
+				lvl = logger.ERROR
+			}
+			s.log.API(lvl, "funds transfer error", map[string]any{"from": res.From, "to": res.To, "error": res.Error, "fatal": res.Fatal})
+		}
 		s.hub.Publish("funds", res)
 	}
 }

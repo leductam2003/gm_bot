@@ -73,6 +73,13 @@ func BuildIncrementCounter() []byte {
 // SeaportAddress returns the Seaport 1.6 address.
 func SeaportAddress() common.Address { return common.HexToAddress(Seaport16) }
 
+// SimulateTx does an eth_call (no state change, no gas) to check a tx would succeed.
+// Returns the revert error if it would fail — used to never broadcast a doomed accept.
+func SimulateTx(ctx context.Context, c *ethclient.Client, from, to common.Address, value *big.Int, data []byte) error {
+	_, err := c.CallContract(ctx, ethereum.CallMsg{From: from, To: &to, Value: value, Data: data}, nil)
+	return err
+}
+
 // Fee is a marketplace/creator fee for a collection.
 type Fee struct {
 	Recipient string
@@ -228,6 +235,3 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 	}
 	return Listing{Parameters: params, Signature: hexutil.Encode(sig), Protocol: Seaport16}, digest, nil
 }
-
-// callMsgUnused keeps the ethereum import referenced if other helpers change.
-var _ = ethereum.CallMsg{}

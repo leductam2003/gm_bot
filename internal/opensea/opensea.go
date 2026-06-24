@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -236,6 +237,90 @@ func (c *Client) OrderTemplate(ctx context.Context, slug, contract string) (zone
 		}
 	}
 	return "", 0, "", false
+}
+
+// Offer is the best active offer on a collection (criteria offers apply to any token).
+type Offer struct {
+	OrderHash string
+	Protocol  string
+	Chain     string
+	PriceWei  string
+}
+
+// BestOffer returns the highest active collection offer (the strongest bid a holder can
+// accept on any token in the collection). ok=false if there are none.
+func (c *Client) BestOffer(ctx context.Context, slug string) (Offer, bool) {
+	if slug == "" {
+		return Offer{}, false
+	}
+	body, _, err := c.get(ctx, "/offers/collection/"+slug)
+	if err != nil {
+		return Offer{}, false
+	}
+	var r struct {
+		Offers []struct {
+			OrderHash       string `json:"order_hash"`
+			Chain           string `json:"chain"`
+			ProtocolAddress string `json:"protocol_address"`
+			Price           struct {
+				Value string `json:"value"`
+			} `json:"price"`
+		} `json:"offers"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return Offer{}, false
+	}
+	best, bestVal := -1, new(big.Int)
+	for i, o := range r.Offers {
+		v, ok := new(big.Int).SetString(o.Price.Value, 10)
+		if !ok {
+			continue
+		}
+		if best < 0 || v.Cmp(bestVal) > 0 {
+			best, bestVal = i, v
+		}
+	}
+	if best < 0 {
+		return Offer{}, false
+	}
+	o := r.Offers[best]
+	return Offer{OrderHash: o.OrderHash, Protocol: o.ProtocolAddress, Chain: o.Chain, PriceWei: o.Price.Value}, true
+}
+
+// OfferFulfillment asks OpenSea to build the accept-offer transaction for a specific
+// token, returning the on-chain target + decoded input_data (re-encode with
+// evm.BuildAcceptCalldata) and the function name (we only support matchAdvancedOrders).
+func (c *Client) OfferFulfillment(ctx context.Context, off Offer, fulfiller, contract, tokenID string) (to, function string, inputData json.RawMessage, err error) {
+	payload := map[string]any{
+		"offer":         map[string]any{"hash": off.OrderHash, "chain": off.Chain, "protocol_address": off.Protocol},
+		"fulfiller":     map[string]any{"address": fulfiller},
+		"consideration": map[string]any{"asset_contract_address": contract, "token_id": tokenID},
+	}
+	body, _, err := c.post(ctx, "/offers/fulfillment_data", payload)
+	if err != nil {
+		return "", "", nil, err
+	}
+	var r struct {
+		FulfillmentData struct {
+			Transaction struct {
+				Function  string          `json:"function"`
+				To        string          `json:"to"`
+				InputData json.RawMessage `json:"input_data"`
+			} `json:"transaction"`
+		} `json:"fulfillment_data"`
+	}
+	if e := json.Unmarshal(body, &r); e != nil {
+		return "", "", nil, e
+	}
+	t := r.FulfillmentData.Transaction
+	if t.To == "" {
+		s := string(body)
+		if len(s) > 200 {
+			s = s[:200]
+		}
+		return "", "", nil, fmt.Errorf("opensea: %s", s)
+	}
+	return t.To, t.Function, t.InputData, nil
 }
 
 // PostListing submits a signed Seaport listing to OpenSea.

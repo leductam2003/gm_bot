@@ -88,7 +88,10 @@ CREATE TABLE IF NOT EXISTS proxies (
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	return s.migrateTasks()
+	if err := s.migrateTasks(); err != nil {
+		return err
+	}
+	return s.migrateActivity()
 }
 
 // --- settings (used to persist vault salt/verifier) ---

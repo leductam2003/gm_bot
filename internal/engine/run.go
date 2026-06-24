@@ -521,6 +521,7 @@ func (e *Engine) watchAndBump(ctx context.Context, rt *TaskRuntime, cfg TaskConf
 			if rcpt.Status == 1 {
 				rt.setWallet(lw.id, func(w *WalletStatus) { w.Status = "success"; w.Detail = fmt.Sprintf("mined block %d", rcpt.BlockNumber.Uint64()) })
 				e.log.Tx(logger.INFO, "mined", cfg.ID, lw.addr.Hex(), map[string]any{"block": rcpt.BlockNumber.Uint64(), "txHash": txHash.Hex()})
+				e.recordMint(cfg, lw, rcpt, value) // Home activity log + cost basis
 				// Chained follow-up after a successful action (transfer minted NFT / drain ETH / ...).
 				if cfg.Mode == ModeAction && cfg.PostAction != nil && cfg.PostAction.Type != "" && cfg.PostAction.Type != "none" {
 					e.runPostAction(ctx, rt, cfg, nodes, lw, rcpt)
@@ -528,6 +529,7 @@ func (e *Engine) watchAndBump(ctx context.Context, rt *TaskRuntime, cfg TaskConf
 			} else {
 				rt.setWallet(lw.id, func(w *WalletStatus) { w.Status = "failed"; w.Detail = "reverted on-chain" })
 				e.log.Tx(logger.WARN, "reverted on-chain", cfg.ID, lw.addr.Hex(), map[string]any{"txHash": txHash.Hex()})
+				e.recordMintFail(cfg, lw)
 			}
 			e.emit(rt)
 			return
@@ -602,6 +604,7 @@ func bumpFees(fees evm.ResolvedFees, baseFee *big.Int) evm.ResolvedFees {
 func (e *Engine) failWallet(rt *TaskRuntime, lw loadedWallet, reason string) {
 	rt.setWallet(lw.id, func(w *WalletStatus) { w.Status = "failed"; w.Detail = reason })
 	e.log.Tx(logger.WARN, "failed: "+reason, rt.Config.ID, lw.addr.Hex(), nil)
+	e.recordMintFail(rt.Config, lw)
 	e.emit(rt)
 }
 

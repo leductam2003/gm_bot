@@ -50,7 +50,10 @@ func (s *Server) Router(webDir string) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.authGuard)
+		r.Use(s.requestLog) // record every API call + error in the Logs tab
 		r.Get("/status", s.handleStatus)
+		r.Get("/home", s.handleHome)            // dashboard: realized PNL + activity
+		r.Post("/home/reset", s.handleHomeReset) // clear PNL/activity history
 		// Vault is auto-managed (no master password) and stays unlocked for the life of
 		// the process — there is no lock/unlock surface to expose.
 
@@ -111,6 +114,7 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/nft/fees", s.handleNftFees)
 		r.Post("/nft/list", s.handleNftList)
 		r.Post("/nft/cancel", s.handleNftCancel)
+		r.Post("/nft/accept", s.handleNftAccept)
 
 		// Logs
 		r.Get("/logs", s.handleLogsSnapshot)

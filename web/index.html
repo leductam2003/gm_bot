@@ -55,7 +55,38 @@
 
       <!-- HOME -->
       <section id="tab-home" class="hide">
-        <div class="grid" id="homeCards"></div>
+        <div class="home-grid">
+          <div class="card pnl-card">
+            <div class="pnl-head">
+              <span class="pnl-lbl">ALL-TIME PNL</span>
+              <div class="pnl-tools">
+                <div class="seg"><button id="pnlEth" class="seg-on" onclick="setPnlUnit('eth')">ETH</button><button id="pnlUsd" onclick="setPnlUnit('usd')">USD</button></div>
+                <button class="pnl-reset" onclick="resetHome()">&#x21BA; Reset</button>
+              </div>
+            </div>
+            <div class="pnl-value" id="pnlValue">+0.00 &#926;</div>
+            <div class="pnl-plays">
+              <div class="pnl-lbl">TOP PLAYS</div>
+              <div id="topPlays" class="plays"></div>
+            </div>
+          </div>
+
+          <div class="card act-card">
+            <div class="act-head">
+              <div class="act-title">&#9201; ACTIVITY LOG</div>
+              <div class="act-counts">
+                <span class="act-ok" id="mintedN">&#10003; 0 minted</span>
+                <span class="act-bad" id="failedN">&#10007; 0 failed</span>
+              </div>
+            </div>
+            <table class="act-table">
+              <thead><tr><th>Time</th><th>Wallet</th><th>Token ID</th><th>Activity</th></tr></thead>
+              <tbody id="actRows"></tbody>
+            </table>
+          </div>
+
+          <div class="grid" id="homeCards"></div>
+        </div>
       </section>
 
       <!-- TASKS -->
@@ -326,12 +357,14 @@
           <div class="row" style="align-items:flex-end">
             <label class="fld" style="flex:2;min-width:240px">Contract Address<input id="nftContract" placeholder="0x..." /></label>
             <label class="fld" style="min-width:150px">Chain<select id="nftChain"></select></label>
-            <label class="fld" style="flex:1;min-width:180px">Wallets<div class="wsel" id="nftWsel"></div></label>
-            <label class="fld" style="min-width:120px">Proxy Group<select id="nftProxy"><option value="">none</option></select></label>
-            <label class="fld" style="width:90px">Threads<input id="nftThreads" value="5" /></label>
+            <label class="fld" style="flex:1;min-width:220px">Wallets<div class="wsel" id="nftWsel"></div></label>
             <button class="primary sm" onclick="nftLoad()">Load NFTs</button>
           </div>
-          <div class="muted" style="font-size:11px;text-transform:none;margin-top:6px">NFT list uses the OpenSea API (not RPC). Many wallets → use a proxy group + lower threads to avoid 429 rate limits.</div>
+          <div class="row" style="align-items:flex-end;margin-top:10px">
+            <label class="fld" style="width:170px">Proxy Group<select id="nftProxy"><option value="">none</option></select></label>
+            <label class="fld" style="width:100px">Threads<input id="nftThreads" value="5" /></label>
+            <span class="muted" style="font-size:11px;text-transform:none;align-self:center;margin-left:8px;flex:1">NFT list uses the OpenSea API (not RPC). Many wallets → proxy group + lower threads to avoid 429.</span>
+          </div>
         </div>
         <div class="card" id="nftManagerCard" style="display:none">
           <div class="panel-head">
@@ -354,6 +387,7 @@
             <div class="right">
               <button class="sm danger" onclick="nftCancel()">Cancel Listings (<span id="nftCancelN">0</span>)</button>
               <button class="sm" onclick="nftSend()">Send Selected</button>
+              <button class="sm" onclick="nftAccept()">Accept Offers</button>
               <button class="primary sm" onclick="nftList()">List Selected</button>
             </div>
           </div>
