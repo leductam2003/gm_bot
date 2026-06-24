@@ -22,7 +22,6 @@ import (
 	"zyperbot/internal/evm"
 	"zyperbot/internal/opensea"
 	"zyperbot/internal/logger"
-	"zyperbot/internal/store"
 )
 
 // walletKey decrypts a wallet's private key via the vault (caller must wipe it).
@@ -932,13 +931,9 @@ func (s *Server) handleNftAccept(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				s.log.Tx(logger.INFO, "accept-offer", 0, owner.Hex(), map[string]any{"token": it.TokenID, "priceWei": off.PriceWei, "txHash": hash})
-				// Realized sale for the Home PNL: proceeds minus the matched mint cost.
-				cost := s.st.MatchMintCost(body.ChainID, contract.Hex(), it.TokenID, owner.Hex())
-				_, _ = s.st.AddSale(store.Sale{
-					Ts: time.Now(), ChainID: body.ChainID, Contract: contract.Hex(), Collection: collName,
-					TokenID: it.TokenID, WalletID: it.WalletID, Address: owner.Hex(), TxHash: hash,
-					ProceedsWei: off.PriceWei, CostWei: cost,
-				})
+				// Book the realized sale only after the tx confirms on-chain ("only count
+				// what actually sold"); detached so it never blocks the accept stream.
+				s.recordSaleOnConfirm(body.ChainID, contract, it.TokenID, owner, hash, off.PriceWei, collName, client)
 			}()
 			switch { // surface non-success outcomes in the Logs tab (success logged above)
 			case res.TxHash != "" && res.Error == "":

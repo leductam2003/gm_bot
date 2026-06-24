@@ -65,7 +65,12 @@ CREATE TABLE IF NOT EXISTS sales (
   tx_hash      TEXT NOT NULL DEFAULT '',
   proceeds_wei TEXT NOT NULL DEFAULT '0',
   cost_wei     TEXT NOT NULL DEFAULT '0'
-);`
+);
+-- Collapse any pre-existing duplicate sales (from before the unique index), keeping the
+-- earliest row, then enforce one sale per (tx, contract, token) at the DB level so the
+-- two recorders (accept-offer + the on-chain scanner) can never double-count.
+DELETE FROM sales WHERE id NOT IN (SELECT MIN(id) FROM sales GROUP BY tx_hash, contract, token_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_dedup ON sales(tx_hash, contract, token_id);`
 	_, err := s.db.Exec(schema)
 	return err
 }
@@ -123,8 +128,10 @@ func (s *Store) RecentMints(limit int) ([]Mint, error) {
 }
 
 // MatchMintCost finds the cost basis of a sold token (the newest unsold matching mint),
-// marks that mint sold, and returns its cost in wei ("0" if no match is found).
-func (s *Store) MatchMintCost(chainID int, contract, tokenID, address string) string {
+// marks that mint sold, and returns its cost in wei plus whether a mint actually matched.
+// found=false means we never minted this token — callers use it to avoid recording PNL
+// for NFTs acquired outside the app.
+func (s *Store) MatchMintCost(chainID int, contract, tokenID, address string) (string, bool) {
 	var id int64
 	var cost string
 	err := s.db.QueryRow(
@@ -133,13 +140,53 @@ func (s *Store) MatchMintCost(chainID int, contract, tokenID, address string) st
 		 ORDER BY id DESC LIMIT 1`,
 		chainID, strings.ToLower(contract), tokenID, address).Scan(&id, &cost)
 	if err != nil {
-		return "0"
+		return "0", false
 	}
-	_, _ = s.db.Exec(`UPDATE mints SET sold=1 WHERE id=?`, id)
+	// Only claim the match if we can actually mark the mint sold; otherwise a failed UPDATE
+	// would let the same mint be matched again and its cost double-counted.
+	if r, uerr := s.db.Exec(`UPDATE mints SET sold=1 WHERE id=? AND sold=0`, id); uerr != nil {
+		return "0", false
+	} else if n, _ := r.RowsAffected(); n == 0 {
+		return "0", false // already claimed by a concurrent caller
+	}
 	if cost == "" {
-		return "0"
+		cost = "0"
 	}
-	return cost
+	return cost, true
+}
+
+// MintedCollection identifies one collection we've minted (to know which to poll for sales).
+type MintedCollection struct {
+	ChainID  int
+	Contract string
+}
+
+// MintedContracts returns the distinct (chain, contract) pairs we have successful mints in.
+func (s *Store) MintedContracts() ([]MintedCollection, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT chain_id, contract FROM mints WHERE status='minted' AND contract<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MintedCollection
+	for rows.Next() {
+		var m MintedCollection
+		if err := rows.Scan(&m.ChainID, &m.Contract); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// SaleExists reports whether a sale is already recorded (dedup by tx + token), so the
+// background poller never double-counts a sale we already booked from Accept Offers.
+func (s *Store) SaleExists(txHash, contract, tokenID string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM sales WHERE lower(tx_hash)=lower(?) AND contract=? AND token_id=?`,
+		txHash, strings.ToLower(contract), tokenID).Scan(&n)
+	return n > 0, err
 }
 
 // AddSale records one realized sale.
@@ -151,10 +198,10 @@ func (s *Store) AddSale(sale Sale) (int64, error) {
 		sale.CostWei = "0"
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO sales(ts,chain_id,contract,collection,token_id,wallet_id,address,tx_hash,proceeds_wei,cost_wei)
+		`INSERT OR IGNORE INTO sales(ts,chain_id,contract,collection,token_id,wallet_id,address,tx_hash,proceeds_wei,cost_wei)
 		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		sale.Ts.Unix(), sale.ChainID, strings.ToLower(sale.Contract), sale.Collection, sale.TokenID,
-		sale.WalletID, sale.Address, sale.TxHash, sale.ProceedsWei, sale.CostWei)
+		sale.WalletID, sale.Address, strings.ToLower(sale.TxHash), sale.ProceedsWei, sale.CostWei)
 	if err != nil {
 		return 0, err
 	}
@@ -184,11 +231,15 @@ func (s *Store) AllSales() ([]Sale, error) {
 	return out, rows.Err()
 }
 
-// ResetActivity clears all recorded mints and sales (the Home "Reset" button).
+// ResetActivity clears all recorded mints and sales plus the on-chain scan cursors, so a
+// following Sync re-runs the full backfill (the Home "Reset" button).
 func (s *Store) ResetActivity() error {
 	if _, err := s.db.Exec(`DELETE FROM mints`); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`DELETE FROM sales`)
+	if _, err := s.db.Exec(`DELETE FROM sales`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM settings WHERE key LIKE 'sales.lastBlock.%'`)
 	return err
 }

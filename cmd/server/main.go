@@ -57,6 +57,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+	st.PruneWLSessions(time.Now().Unix()) // drop expired whitelist session tokens
 
 	// Apply dashboard-configured API keys (saved in the DB) over any .env values, so
 	// keys set in Settings persist across restarts and config.X() picks them up.
@@ -101,6 +102,7 @@ func main() {
 	}
 
 	srv := api.New(st, vault, pool, eng, lg, hub, tg)
+	go srv.RunSalesSync(context.Background()) // detect listing-sales for the Home PNL
 
 	// Listen first so a ":0" random port is resolved before we build the window URL.
 	ln, err := net.Listen("tcp", addr)

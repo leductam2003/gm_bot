@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"math/big"
 	"net"
@@ -17,6 +18,11 @@ import (
 // nodesForChain dials all configured (or registry-default) RPCs for a chain so a send
 // can broadcast (and report which endpoint accepted the tx).
 func (s *Server) nodesForChain(r *http.Request, chainID int) ([]evm.Node, error) {
+	return s.nodesForChainCtx(r.Context(), chainID)
+}
+
+// nodesForChainCtx is nodesForChain for background work that has no *http.Request.
+func (s *Server) nodesForChainCtx(ctx context.Context, chainID int) ([]evm.Node, error) {
 	var urls []string
 	if es, _ := s.st.ListRPCByChain(chainID); len(es) > 0 {
 		for _, e := range es {
@@ -30,7 +36,7 @@ func (s *Server) nodesForChain(r *http.Request, chainID int) ([]evm.Node, error)
 	}
 	var nodes []evm.Node
 	for _, u := range urls {
-		if cl, err := s.pool.Dial(r.Context(), u); err == nil {
+		if cl, err := s.pool.Dial(ctx, u); err == nil {
 			nodes = append(nodes, evm.Node{URL: u, Client: cl})
 		}
 	}

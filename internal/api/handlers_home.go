@@ -97,18 +97,21 @@ var ethUsdCache struct {
 // user data (just fetches a public price) and caches for 60s; returns the last value (or
 // 0) on any error so the dashboard degrades gracefully.
 func (s *Server) ethUsd(ctx context.Context) float64 {
+	// Fast path: read the cache under the lock and release it before any network I/O so a
+	// slow Coinbase response can't stall concurrent /api/home requests behind the mutex.
 	ethUsdCache.mu.Lock()
-	defer ethUsdCache.mu.Unlock()
-	if ethUsdCache.price > 0 && time.Since(ethUsdCache.at) < 60*time.Second {
-		return ethUsdCache.price
+	price, at := ethUsdCache.price, ethUsdCache.at
+	ethUsdCache.mu.Unlock()
+	if price > 0 && time.Since(at) < 60*time.Second {
+		return price
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.coinbase.com/v2/prices/ETH-USD/spot", nil)
 	if err != nil {
-		return ethUsdCache.price
+		return price
 	}
 	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
 	if err != nil {
-		return ethUsdCache.price
+		return price // keep the last good value on error
 	}
 	defer resp.Body.Close()
 	var j struct {
@@ -118,9 +121,11 @@ func (s *Server) ethUsd(ctx context.Context) float64 {
 	}
 	if json.NewDecoder(resp.Body).Decode(&j) == nil {
 		if v, e := strconv.ParseFloat(j.Data.Amount, 64); e == nil && v > 0 {
-			ethUsdCache.price = v
-			ethUsdCache.at = time.Now()
+			ethUsdCache.mu.Lock()
+			ethUsdCache.price, ethUsdCache.at = v, time.Now()
+			ethUsdCache.mu.Unlock()
+			return v
 		}
 	}
-	return ethUsdCache.price
+	return price
 }

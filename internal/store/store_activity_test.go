@@ -36,20 +36,40 @@ func TestActivityAndRealizedPnl(t *testing.T) {
 	}
 
 	// Sell token 6 — case-insensitive contract + address match -> cost basis 1000, marks sold.
-	if cost := st.MatchMintCost(1, "0xabc", "6", "0xWALLET"); cost != "1000" {
-		t.Fatalf("matched cost = %s, want 1000", cost)
+	if cost, found := st.MatchMintCost(1, "0xabc", "6", "0xWALLET"); cost != "1000" || !found {
+		t.Fatalf("matched cost = %s found = %v, want 1000/true", cost, found)
 	}
-	// Selling the same token again finds no unsold match -> "0".
-	if cost := st.MatchMintCost(1, "0xabc", "6", "0xwallet"); cost != "0" {
-		t.Fatalf("re-sold cost = %s, want 0", cost)
+	// Selling the same token again finds no unsold match -> not found.
+	if cost, found := st.MatchMintCost(1, "0xabc", "6", "0xwallet"); found || cost != "0" {
+		t.Fatalf("re-sold cost = %s found = %v, want 0/false", cost, found)
+	}
+	// SaleExists dedup: unknown sale absent, then present after AddSale.
+	if ex, _ := st.SaleExists("0xDEAD", "0xabc", "6"); ex {
+		t.Fatal("SaleExists true before any sale")
 	}
 
-	if _, err := st.AddSale(Sale{Ts: now, ChainID: 1, Contract: "0xabc", Collection: "Plimpo", TokenID: "6", ProceedsWei: "5000", CostWei: "1000"}); err != nil {
+	if _, err := st.AddSale(Sale{Ts: now, ChainID: 1, Contract: "0xabc", Collection: "Plimpo", TokenID: "6", TxHash: "0xSALEtx", ProceedsWei: "5000", CostWei: "1000"}); err != nil {
 		t.Fatal(err)
 	}
 	sales, _ := st.AllSales()
 	if len(sales) != 1 || sales[0].ProceedsWei != "5000" || sales[0].CostWei != "1000" || sales[0].Collection != "Plimpo" {
 		t.Fatalf("sales = %+v", sales)
+	}
+	// Re-inserting the same (tx, contract, token) must be a no-op (unique index dedup), so the
+	// two recorders can't double-count a sale.
+	if _, err := st.AddSale(Sale{Ts: now, ChainID: 1, Contract: "0xABC", Collection: "Plimpo", TokenID: "6", TxHash: "0xsaletx", ProceedsWei: "9999", CostWei: "1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if s2, _ := st.AllSales(); len(s2) != 1 {
+		t.Fatalf("duplicate sale not deduped: %d rows", len(s2))
+	}
+	// Dedup: the just-booked sale is now found (case-insensitive tx match).
+	if ex, _ := st.SaleExists("0xsaletx", "0xABC", "6"); !ex {
+		t.Fatal("SaleExists false after AddSale")
+	}
+	// MintedContracts surfaces the (chain, contract) we minted into.
+	if mc, _ := st.MintedContracts(); len(mc) != 1 || mc[0].ChainID != 1 || mc[0].Contract != "0xabc" {
+		t.Fatalf("MintedContracts = %+v", mc)
 	}
 
 	if err := st.ResetActivity(); err != nil {

@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS proxies (
 	if err := s.migrateTasks(); err != nil {
 		return err
 	}
-	return s.migrateActivity()
+	if err := s.migrateActivity(); err != nil {
+		return err
+	}
+	return s.migrateWL()
 }
 
 // --- settings (used to persist vault salt/verifier) ---

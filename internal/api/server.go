@@ -52,8 +52,9 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Use(s.authGuard)
 		r.Use(s.requestLog) // record every API call + error in the Logs tab
 		r.Get("/status", s.handleStatus)
-		r.Get("/home", s.handleHome)            // dashboard: realized PNL + activity
+		r.Get("/home", s.handleHome)             // dashboard: realized PNL + activity
 		r.Post("/home/reset", s.handleHomeReset) // clear PNL/activity history
+		r.Post("/home/sync", s.handleHomeSync)   // poll OpenSea for listing-sales now
 		// Vault is auto-managed (no master password) and stays unlocked for the life of
 		// the process — there is no lock/unlock surface to expose.
 

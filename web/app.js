@@ -140,7 +140,7 @@ function makeWalletSelect(containerId) {
           <span>${name}</span><span class="cnt">${sel}/${ws.length}</span>
         </div>
         <div class="wsel-items ${exp ? "show" : ""}">
-          ${filtered.map((w) => `<label class="wsel-item"><input type="checkbox" data-wid="${w.id}" ${state.selected.has(w.id) ? "checked" : ""}/> ${w.label}-${w.id} <span class="mono">${short(w.address)}</span></label>`).join("")}
+          ${filtered.map((w) => `<label class="wsel-item"><input type="checkbox" data-wid="${w.id}" ${state.selected.has(w.id) ? "checked" : ""}/> ${escHtml(w.label)}-${w.id} <span class="mono">${short(w.address)}</span></label>`).join("")}
         </div></div>`;
     }
     groupsEl.innerHTML = html || `<div class="muted" style="padding:12px">No wallets</div>`;
@@ -201,7 +201,7 @@ function makeRpcSelect(containerId) {
           <span>${name}</span><span class="cnt">${sel}/${es.length}</span>
         </div>
         <div class="wsel-items ${exp ? "show" : ""}">
-          ${filtered.map((e) => `<label class="wsel-item"><input type="checkbox" data-url="${encodeURIComponent(e.url)}" ${state.selected.has(e.url) ? "checked" : ""}/> ${e.name} <span class="mono">${shortURL2(e.url)}</span></label>`).join("")}
+          ${filtered.map((e) => `<label class="wsel-item"><input type="checkbox" data-url="${encodeURIComponent(e.url)}" ${state.selected.has(e.url) ? "checked" : ""}/> ${escHtml(e.name)} <span class="mono">${shortURL2(e.url)}</span></label>`).join("")}
         </div></div>`;
     }
     groupsEl.innerHTML = html || `<div class="muted" style="padding:12px">No RPC endpoints — add some on the RPC page</div>`;
@@ -238,7 +238,7 @@ function go(tab) {
   if (tab === "rpc") loadRPC();
   if (tab === "proxies") loadProxies();
   if (tab === "whitelists") loadWhitelistTab();
-  if (tab === "home") loadHome();
+  if (tab === "home") { loadHome(); kickSalesSync(); }
   if (tab === "settings") { loadTelegram(); loadApiKeys(); loadSettingsPanel(); }
   if (tab === "calculator") renderCalc();
   if (tab === "logs") loadLogs();
@@ -272,6 +272,9 @@ async function loadChains() {
 // ---------- home / dashboard ----------
 let HOME=null, PNL_UNIT="eth", HOME_WLABELS={};
 function escHtml(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+// Sanitize a URL for use inside style="background-image:url('...')": encode the chars that
+// could break out of the quotes/url()/attribute. Empty for non-http(s) URLs.
+function cssUrl(u){ u=String(u||""); if(!/^https?:\/\//i.test(u)) return ""; return u.replace(/['"()\\\s<>]/g, c=>"%"+c.charCodeAt(0).toString(16)); }
 function shortAddr(a){ a=String(a||""); return a.length>12 ? a.slice(0,6)+"…"+a.slice(-4) : a; }
 function weiToEthNum(wei){ try{ return Number(BigInt(String(wei||"0")))/1e18; }catch{ return 0; } }
 function txExplorerUrl(chainId, hash){ if(!hash) return ""; const c=(CHAINS||[]).find(c=>c.id===chainId); return (c&&c.explorer)? c.explorer.replace(/\/+$/,"")+"/tx/"+hash : ""; }
@@ -303,7 +306,7 @@ function renderPnl(){
   box.innerHTML = plays.length ? plays.slice(0,8).map(p=>{
     const e = weiToEthNum(p.realizedWei);
     return `<div class="play-row"><span class="play-name">${escHtml(p.collection||p.contract)}</span><span class="${pnlClass(e)||'muted'}">${fmtPnl(e)}</span></div>`;
-  }).join("") : `<div class="muted" style="padding:6px 0">No sales yet — realized PNL appears after you sell (Accept Offers).</div>`;
+  }).join("") : `<div class="muted" style="padding:6px 0">No sales yet — realized PNL appears after a minted NFT actually sells on-chain (a filled listing or an accepted offer).</div>`;
 }
 function renderHome(){
   renderPnl();
@@ -326,6 +329,13 @@ async function resetHome(){
 // Live-refresh the dashboard (throttled) when it's the open tab and a task/sale event lands.
 let homeRefreshT=null;
 function homeMaybeRefresh(){ const el=$("tab-home"); if(!el||el.classList.contains("hide"))return; clearTimeout(homeRefreshT); homeRefreshT=setTimeout(loadHome,1500); }
+// Ask the server to poll OpenSea for listings that sold (fire-and-forget; the 'home' WS
+// event refreshes the dashboard when new sales are booked).
+function kickSalesSync(){ api("/home/sync",{method:"POST"}).catch(()=>{}); }
+async function syncHome(){
+  toast("Scanning the blockchain for sold listings…","info");
+  try{ await api("/home/sync",{method:"POST"}); setTimeout(loadHome,4000); }catch(e){ toast(e.message,"error"); }
+}
 
 // ---------- wallets ----------
 let WSEL = new Set(), SEND_WID = null;
@@ -350,7 +360,7 @@ function renderWallets() {
     return `
     <tr data-addr="${w.address}" class="${sel?'rowsel':''}">
       <td><input type="checkbox" ${sel?'checked':''} onchange="toggleWalletRow(${w.id},this.checked)" /></td>
-      <td>${w.label}-${w.id}</td>
+      <td>${escHtml(w.label)}-${w.id}</td>
       <td class="mono">${short(w.address)} <span class="copyable" onclick="copy('${w.address}')">${IC.copy}</span></td>
       <td class="bal mono">—</td>
       <td class="acts" style="justify-content:flex-end">
@@ -431,7 +441,7 @@ async function openFundsModal(){
   try{ WALLETS = await api("/wallets"); }catch{}
   const disabled=new Set((APP_CFG.chainsDisabled)||[]);
   $("fChain").innerHTML = (CHAINS||[]).filter(c=>!disabled.has(c.id)).map(c=>`<option value="${c.id}">${c.name} (${c.id})</option>`).join("");
-  $("fFrom").innerHTML = `<option value="">— pick funder —</option>` + (WALLETS||[]).map(w=>`<option value="${w.id}">${w.label}-${w.id} · ${short(w.address)}</option>`).join("");
+  $("fFrom").innerHTML = `<option value="">— pick funder —</option>` + (WALLETS||[]).map(w=>`<option value="${w.id}">${escHtml(w.label)}-${w.id} · ${short(w.address)}</option>`).join("");
   if(!fundToSel) fundToSel = makeWalletSelect("fToSel");
   if(!fundFromSel) fundFromSel = makeWalletSelect("fFromSel");
   await fundToSel.reload(); await fundFromSel.reload();
@@ -499,14 +509,14 @@ function renderFunds(){
   const rows=FUND_RUN.order.map(i=>FUND_RUN.byIndex[i]); let ok=0,fail=0;
   const body=rows.map(r=>{
     let stat;
-    if(r.error){ fail++; stat=`<span style="color:var(--danger)">✗ ${r.error}</span>`; }
+    if(r.error){ fail++; stat=`<span style="color:var(--danger)">✗ ${escHtml(r.error)}</span>`; }
     else { ok++; stat=`<span style="color:var(--accent)">✓ ${r.txHash?short(r.txHash):"sent"}</span>`; }
     return `<div class="fundrow"><span class="mono">${short(r.from||"")} → ${short(r.to||"")}</span>${stat}</div>`;
   }).join("");
   const running = !FUND_RUN.done && !FUND_RUN.fatal;
   const stop = running ? ` · <span class="selclear" onclick="stopFunds()">Stop</span>` : "";
   const head = FUND_RUN.fatal
-    ? `<div style="color:var(--danger);margin-bottom:6px">${FUND_RUN.fatal}</div>`
+    ? `<div style="color:var(--danger);margin-bottom:6px">${escHtml(FUND_RUN.fatal)}</div>`
     : `<div class="muted" style="margin-bottom:6px">${rows.length}/${FUND_RUN.total||"?"} done · ${ok} ✓ · ${fail} ✗${stop}</div>`;
   $("fResults").innerHTML = head + (body || '<div class="muted">Starting…</div>');
 }
@@ -517,8 +527,8 @@ async function loadRPC(){
   $("rpcCount").textContent=`· ${es.length} Endpoints`;
   $("rpcRows").innerHTML=es.map(e=>{
     const c=CHAINS.find(x=>x.id===e.chainId);
-    return `<tr><td><input type="checkbox"/></td><td>${e.name}</td><td>${c?c.name:e.chainId}</td>
-      <td class="mono">${e.url}</td><td class="lat" data-url="${e.url}"><span class="muted">—</span></td>
+    return `<tr><td><input type="checkbox"/></td><td>${escHtml(e.name)}</td><td>${escHtml(c?c.name:e.chainId)}</td>
+      <td class="mono">${escHtml(e.url)}</td><td class="lat" data-url="${encodeURIComponent(e.url)}"><span class="muted">—</span></td>
       <td class="acts" style="justify-content:flex-end"><button class="icon danger" title="Delete" onclick="delRPC(${e.id})">${IC.trash}</button></td></tr>`;
   }).join("");
 }
@@ -584,6 +594,13 @@ async function loadWhitelistTab(){
   const sel=$("wlProxy"); if(sel){ const cur=sel.value; const gs=new Set(["",...PROXY_GROUPS]); PROXIES.forEach(p=>gs.add(p.group)); sel.innerHTML=[...gs].map(g=>`<option value="${g}">${g||"none"}</option>`).join(""); sel.value=cur; }
 }
 let WL_RUN = null; // { id, total, slug, byId:{}, order:[] } — current/last check
+let WL_SORT = { idx:null, dir:"desc" }; // sort the table by eligibility for one stage column
+function wlEligibleFor(w, stageIndex){ return (w.stages||[]).some(s=>s.stageIndex===stageIndex && s.isEligible); }
+function wlSortBy(idx){
+  if(WL_SORT.idx===idx) WL_SORT.dir = WL_SORT.dir==="desc" ? "asc" : "desc";
+  else { WL_SORT.idx = idx; WL_SORT.dir = "desc"; } // first click: eligible-first
+  renderWLLive();
+}
 async function wlCheck(){
   const link=($("wlLink").value||"").trim(); if(!link) return toast("Paste a drop link or contract address","info");
   let walletIds = wlWS ? wlWS.selected() : [];
@@ -592,43 +609,49 @@ async function wlCheck(){
   const proxyGroup = ($("wlProxy")||{}).value || "";
   const threads = Number($("wlThreads").value)||5;
   const runId = "wl"+Date.now();
-  WL_RUN = { id: runId, total: walletIds.length, slug:"", byId:{}, order:[] };
+  WL_RUN = { id: runId, total: walletIds.length, slug:"", byId:{}, order:[], done:false };
   $("wlResultCard").style.display="block";
   $("wlThead").innerHTML=""; $("wlRows").innerHTML="";
   renderWLLive(); // shows "0/N checked" while results stream in over the WS
   const btn=$("wlCheckBtn"); btn.disabled=true; btn.textContent="Checking…";
   try{
+    // The check runs detached on the server (a big SIWE sweep outlasts the HTTP timeout);
+    // results arrive over the WS. The button re-enables in renderWLLive when the run finishes.
     const r=await api("/whitelist/check",{method:"POST",body:JSON.stringify({link, walletIds, proxyGroup, threads, runId})});
-    // Authoritative final pass (covers any WS messages dropped by a slow client).
-    if(WL_RUN && WL_RUN.id===runId){
-      WL_RUN.slug=r.slug||WL_RUN.slug;
-      (r.wallets||[]).forEach(w=>{ if(!(w.walletId in WL_RUN.byId)) WL_RUN.order.push(w.walletId); WL_RUN.byId[w.walletId]=w; });
-      renderWLLive(true);
-    }
-  }catch(e){ toast(e.message,"error"); }
-  finally{ btn.disabled=false; btn.textContent="Check"; }
+    if(WL_RUN && WL_RUN.id===runId){ WL_RUN.total=r.total||WL_RUN.total; WL_RUN.slug=r.slug||WL_RUN.slug; renderWLLive(); }
+  }catch(e){ toast(e.message,"error"); btn.disabled=false; btn.textContent="Check"; }
 }
-// WS push: one wallet finished checking — drop its row in immediately.
+// WS push: a wallet finished (or the whole run completed with {done:true}).
 function wlOnResult(d){
   if(!WL_RUN || d.runId!==WL_RUN.id) return;
   if(d.total) WL_RUN.total=d.total; // backend's filtered count is authoritative
   if(d.slug) WL_RUN.slug=d.slug;
+  if(d.done){ WL_RUN.done=true; renderWLLive(); return; }
   if(!(d.walletId in WL_RUN.byId)) WL_RUN.order.push(d.walletId);
   WL_RUN.byId[d.walletId]=d;
   renderWLLive();
 }
 function wlStageLabel(c, nonPubCount){ return c.stageType==="PUBLIC_SALE" ? "Public stage" : (nonPubCount>1 ? "WL #"+c.stageIndex : "WL"); }
-function renderWLLive(done){
+function renderWLLive(){
   if(!WL_RUN) return;
   const results = WL_RUN.order.map(id=>WL_RUN.byId[id]);
   const byIdx={}; results.forEach(w=>(w.stages||[]).forEach(s=>byIdx[s.stageIndex]={stageType:s.stageType, stageIndex:s.stageIndex}));
   const cols=Object.values(byIdx).sort((a,b)=>{ const ap=a.stageType==="PUBLIC_SALE"?1:0, bp=b.stageType==="PUBLIC_SALE"?1:0; return ap-bp || a.stageIndex-b.stageIndex; });
   const nonPub=cols.filter(c=>c.stageType!=="PUBLIC_SALE").length;
-  $("wlThead").innerHTML = `<tr><th>Wallet</th>${cols.map(c=>`<th>${wlStageLabel(c,nonPub)}</th>`).join("")}</tr>`;
+  if(WL_SORT.idx!=null && !cols.some(c=>c.stageIndex===WL_SORT.idx)) WL_SORT.idx=null; // stage gone → clear sort
+  $("wlThead").innerHTML = `<tr><th>Wallet</th>${cols.map(c=>{
+    const arrow = WL_SORT.idx===c.stageIndex ? (WL_SORT.dir==="desc" ? " ↓" : " ↑") : "";
+    return `<th onclick="wlSortBy(${c.stageIndex})" style="cursor:pointer;user-select:none" title="Click to sort eligible wallets to the top">${wlStageLabel(c,nonPub)}${arrow}</th>`;
+  }).join("")}</tr>`;
+  // Optional sort: float wallets eligible for the clicked stage to the top (stable otherwise).
+  const view = WL_SORT.idx==null ? results : results.slice().sort((a,b)=>{
+    const ea=wlEligibleFor(a,WL_SORT.idx)?1:0, eb=wlEligibleFor(b,WL_SORT.idx)?1:0;
+    return ea===eb ? 0 : (WL_SORT.dir==="desc" ? eb-ea : ea-eb);
+  });
   let eligibleAny=0;
-  let rowsHtml = results.map(w=>{
-    const nameCell=`<td><div class="two"><span>${w.label||"wallet"}-${w.walletId}</span><span class="sm2 mono">${short(w.address)}</span></div></td>`;
-    if(w.error) return `<tr>${nameCell}<td colspan="${cols.length||1}" class="mono" style="color:var(--danger)">${w.error}</td></tr>`;
+  let rowsHtml = view.map(w=>{
+    const nameCell=`<td><div class="two"><span>${escHtml(w.label||"wallet")}-${w.walletId}</span><span class="sm2 mono">${short(w.address)}</span></div></td>`;
+    if(w.error) return `<tr>${nameCell}<td colspan="${cols.length||1}" class="mono" style="color:var(--danger)">${escHtml(w.error)}</td></tr>`;
     const sByIdx={}; (w.stages||[]).forEach(s=>sByIdx[s.stageIndex]=s);
     let cum=0, anyElig=false;
     const cells=cols.map(c=>{ const s=sByIdx[c.stageIndex];
@@ -639,9 +662,11 @@ function renderWLLive(done){
     return `<tr>${nameCell}${cells}</tr>`;
   }).join("");
   const checked=results.length, total=WL_RUN.total;
-  if(checked<total) rowsHtml += `<tr><td colspan="${(cols.length||0)+1}" class="muted" style="padding:14px;text-align:center">Checking ${checked}/${total}… <span class="spin">◠</span></td></tr>`;
+  const finished = WL_RUN.done || (total>0 && checked>=total);
+  if(!finished) rowsHtml += `<tr><td colspan="${(cols.length||0)+1}" class="muted" style="padding:14px;text-align:center">Checking ${checked}/${total}… <span class="spin">◠</span></td></tr>`;
   $("wlRows").innerHTML = rowsHtml || `<tr><td class="muted" style="padding:24px;text-align:center">No wallets</td></tr>`;
   $("wlSummary").textContent = `· ${WL_RUN.slug||""} · ${checked}/${total} checked · ${eligibleAny} eligible`;
+  if(finished){ const btn=$("wlCheckBtn"); if(btn){ btn.disabled=false; btn.textContent="Check"; } }
 }
 
 // ---------- tasks ----------
@@ -652,7 +677,7 @@ async function loadTasks(){ const ts=await api("/tasks"); TASKS={}; ts.forEach(t
 function taskStatusHTML(r){
   if(r.status==="running") return `<span class="st s-running"><svg class="i spin" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>${(r.detail||"Running").slice(0,28)}</span>`;
   const label = r.status==="idle" ? "Ready" : (r.detail ? r.detail.slice(0,28) : r.status);
-  return `<span class="st s-${r.status}"><span class="dot"></span>${label}</span>`;
+  return `<span class="st s-${r.status}"><span class="dot"></span>${escHtml(label)}</span>`;
 }
 function renderTasks(){
   const all=Object.values(TASKS).sort((a,b)=>a.id-b.id);
@@ -690,7 +715,7 @@ function renderTasks(){
     const sel=TASK_SEL.has(r.key), modeCls=r.mode==="spam"?"blue":"green";
     return `<tr class="${sel?'rowsel':''}">
       <td><input type="checkbox" ${sel?'checked':''} onchange="toggleTaskRow('${r.key}',this.checked)" /></td>
-      <td><div class="two"><span>${r.name}</span><span class="sm2 mono">${short(r.address)}</span></div></td>
+      <td><div class="two"><span>${escHtml(r.name)}</span><span class="sm2 mono">${short(r.address)}</span></div></td>
       <td class="mono">${r.gasFee||"auto / auto"}</td>
       <td>${r.value}</td>
       <td><span class="pill ${modeCls}">${r.mode}${r.seadrop?" · seadrop":""}</span></td>
@@ -915,7 +940,7 @@ async function resolveTaskLink(){
       }).join("");
       hint.style.display="block";
       hint.innerHTML=`
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${r.name||"collection"}</b></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${escHtml(r.name||"collection")}</b></div>
         <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:end">
           <label class="fld">Mint Phase<select id="tMintPhase" onchange="onPhaseChange()">${opts}</select></label>
           <label class="fld">NFT Amount (max ${max})<input id="tQty" value="1" /></label>
@@ -1067,7 +1092,7 @@ async function nftLoad(){
     NFT_RUN.total=r.total||0;
     if(!NFT_RUN.total){ $("nftGrid").innerHTML=`<div class="muted" style="padding:20px">No wallets selected.</div>`; NFT_RUN=null; return; }
     updateNftProgress();
-  }catch(e){ $("nftGrid").innerHTML=`<div class="warnbox">${e.message}</div>`; NFT_RUN=null; }
+  }catch(e){ $("nftGrid").innerHTML=`<div class="warnbox">${escHtml(e.message)}</div>`; NFT_RUN=null; }
 }
 // WS push: one wallet's NFTs arrived (or the run finished).
 function nftOnResult(d){
@@ -1107,11 +1132,11 @@ function nftRender(){
   if(NFT_VIEW==="list"){
     g.innerHTML=NFT_ITEMS.map(it=>{
       const k=nftKey(it), sel=NFT_SEL.has(k);
-      const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
+      const img=cssUrl(it.image)?`style="background-image:url('${cssUrl(it.image)}')"`:"";
       return `<div class="nft-row ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
         <span class="nr-check">${sel?'✓':''}</span>
         <span class="nr-thumb" ${img}></span>
-        <span class="nr-name">${it.name||('#'+it.tokenId)} <span class="muted">#${it.tokenId}</span></span>
+        <span class="nr-name">${escHtml(it.name||('#'+it.tokenId))} <span class="muted">#${it.tokenId}</span></span>
         <span class="nr-owner mono">${short(it.owner)}</span>
         <span class="nr-stat">${it.listed?'<span class="badge listed">LISTED</span>':''}</span>
       </div>`;
@@ -1119,11 +1144,11 @@ function nftRender(){
   } else {
     g.innerHTML=NFT_ITEMS.map(it=>{
       const k=nftKey(it), sel=NFT_SEL.has(k);
-      const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
+      const img=cssUrl(it.image)?`style="background-image:url('${cssUrl(it.image)}')"`:"";
       return `<div class="nft-cell ${sel?'sel':''} ${it.listed?'listed':''}" onclick="nftToggle('${k}')">
         <div class="nft-img" ${img}></div>
         <div class="nft-body">
-          <div class="nft-name"><span class="nm">${it.name||('#'+it.tokenId)}</span><span class="id">#${it.tokenId}</span></div>
+          <div class="nft-name"><span class="nm">${escHtml(it.name||('#'+it.tokenId))}</span><span class="id">#${it.tokenId}</span></div>
           <div class="nft-foot"><span class="vault">${short(it.owner)}</span>${it.listed?'<span class="badge listed">LISTED</span>':''}</div>
         </div></div>`;
     }).join("");
@@ -1190,10 +1215,10 @@ async function loadListFloorFees(){
 }
 function renderListRows(){
   $("listRows").innerHTML=LIST_ITEMS.map((it,i)=>{
-    const img=it.image?`style="background-image:url('${it.image.replace(/'/g,"")}')"`:"";
+    const img=cssUrl(it.image)?`style="background-image:url('${cssUrl(it.image)}')"`:"";
     const proc=procOf(it.price);
     return `<div class="ltr">
-      <span class="c-item"><span class="lt-thumb" ${img}></span><span>${it.name}</span></span>
+      <span class="c-item"><span class="lt-thumb" ${img}></span><span>${escHtml(it.name)}</span></span>
       <span class="c-qty">1</span>
       <span class="c-floor">${it.floor!=null?it.floor:"—"}</span>
       <span class="c-proc">${proc}</span>
@@ -1300,11 +1325,11 @@ async function nftResolve(){
   $("nftDrop").innerHTML=`<div class="muted" style="margin-top:12px">Resolving…</div>`;
   try{
     const r=await api("/nft/resolve",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract})});
-    if(!r.seadrop){ $("nftDrop").innerHTML=`<div class="warnbox" style="margin-top:12px">${r.name?r.name+": ":""}Not a SeaDrop public mint. Use a Task with a Function signature or Hex calldata to mint this contract.</div>`; return; }
+    if(!r.seadrop){ $("nftDrop").innerHTML=`<div class="warnbox" style="margin-top:12px">${r.name?escHtml(r.name)+": ":""}Not a SeaDrop public mint. Use a Task with a Function signature or Hex calldata to mint this contract.</div>`; return; }
     const priceEth=(Number(BigInt(r.priceWei))/1e18).toFixed(5);
     $("nftDrop").innerHTML=`
       <div class="dropinfo">
-        <div class="di"><div class="k">Collection</div><div class="v">${r.name||"—"}</div></div>
+        <div class="di"><div class="k">Collection</div><div class="v">${escHtml(r.name||"—")}</div></div>
         <div class="di"><div class="k">Price</div><div class="v">${priceEth} ETH</div></div>
         <div class="di"><div class="k">Max / Wallet</div><div class="v">${r.maxPerWallet}</div></div>
         <div class="di"><div class="k">Fee</div><div class="v">${(r.feeBps/100).toFixed(2)}%</div></div>
@@ -1316,7 +1341,7 @@ async function nftResolve(){
         <button class="primary sm" onclick="nftCreateMint()">Create Mint Task</button>
         <span class="muted">uses the wallets selected above</span>
       </div>`;
-  }catch(e){ $("nftDrop").innerHTML=`<div class="warnbox" style="margin-top:12px">${e.message}</div>`; }
+  }catch(e){ $("nftDrop").innerHTML=`<div class="warnbox" style="margin-top:12px">${escHtml(e.message)}</div>`; }
 }
 async function nftScan(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
@@ -1467,7 +1492,7 @@ async function checkUpdate(){
     const r=await api("/update/check");
     if($("updVer")) $("updVer").textContent="v"+(r.current||"?");
     if(!r.configured){ if(st) st.textContent="set an update source first"; toast("Set a GitHub owner/repo, then Check","info"); return; }
-    if(r.hasUpdate){ if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${r.latest} available</span> · <a href="${r.url}" target="_blank">release</a>`; toast(`Update available: v${r.latest}`,"success"); }
+    if(r.hasUpdate){ const safe=(r.url&&/^https:\/\//i.test(r.url))?escHtml(r.url):"#"; if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${escHtml(r.latest)} available</span> · <a href="${safe}" target="_blank" rel="noopener">release</a>`; toast(`Update available: v${r.latest}`,"success"); }
     else { if(st) st.textContent="up to date ✓"; toast("You're on the latest version","info"); }
   }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
 }
@@ -1518,6 +1543,7 @@ function connectWS(){
     if(m.type==="task"){ TASKS[m.data.id]=m.data; renderTasks(); homeMaybeRefresh(); }
     else if(m.type==="log"){ appendLog(m.data); }
     else if(m.type==="accept"){ nftOnAccept(m.data); homeMaybeRefresh(); }
+    else if(m.type==="home"){ homeMaybeRefresh(); }
     else if(m.type==="whitelist"){ wlOnResult(m.data); }
     else if(m.type==="funds"){ fundsOnResult(m.data); }
     else if(m.type==="nft"){ nftOnResult(m.data); }

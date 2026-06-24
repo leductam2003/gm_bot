@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -107,7 +108,6 @@ func (s *Server) handleWhitelistCheck(w http.ResponseWriter, r *http.Request) {
 		targets = append(targets, wl)
 	}
 
-	out := make([]wlResult, len(targets))
 	threads := body.Threads
 	if threads < 1 {
 		threads = 5
@@ -115,63 +115,146 @@ func (s *Server) handleWhitelistCheck(w http.ResponseWriter, r *http.Request) {
 	if threads > 20 {
 		threads = 20 // OpenSea throttles hard — cap concurrency (use proxies to go wider)
 	}
-	s.log.API(logger.INFO, "whitelist check started", map[string]any{"slug": slug, "wallets": len(targets), "threads": threads})
-	sem := make(chan struct{}, threads)
-	var wg sync.WaitGroup
-	for i, wl := range targets {
-		wg.Add(1)
-		go func(i int, wl store.Wallet) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+	total := len(targets)
+	// Return immediately and run the batch detached: a 200–500 wallet SIWE sweep far
+	// outlasts the 30s HTTP timeout, which is what caused "context deadline exceeded".
+	// Results stream over the WS ("whitelist" event); a final {done:true} marks completion.
+	writeJSON(w, http.StatusOK, map[string]any{"runId": body.RunID, "slug": slug, "total": total})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		s.log.API(logger.INFO, "whitelist check started", map[string]any{"slug": slug, "wallets": total, "threads": threads})
+
+		var mu sync.Mutex
+		results := make(map[int64]wlResult, total)
+		publish := func(res wlResult) {
+			mu.Lock()
+			results[res.WalletID] = res
+			mu.Unlock()
+			s.hub.Publish("whitelist", map[string]any{
+				"runId": body.RunID, "slug": slug, "total": total,
+				"walletId": res.WalletID, "address": res.Address, "label": res.Label,
+				"ok": res.OK, "error": res.Error, "stages": res.Stages,
+			})
+		}
+		// checkOne runs one wallet within its own time budget, retrying on error; it always
+		// publishes a result so the slot frees and the run reaches 100% checked.
+		checkOne := func(wl store.Wallet, px string) {
 			res := wlResult{WalletID: wl.ID, Address: wl.Address, Label: wl.Label}
-			// Publish each wallet's result over the WS the moment it finishes so the UI
-			// fills in row-by-row instead of waiting for the whole batch.
-			defer func() {
-				out[i] = res
-				if res.Error != "" {
-					s.log.API(logger.WARN, "whitelist wallet failed", map[string]any{"wallet": res.Address, "label": res.Label, "error": res.Error})
-				}
-				s.hub.Publish("whitelist", map[string]any{
-					"runId": body.RunID, "slug": slug, "total": len(targets),
-					"walletId": res.WalletID, "address": res.Address, "label": res.Label,
-					"ok": res.OK, "error": res.Error, "stages": res.Stages,
-				})
-			}()
+			defer func() { publish(res) }()
 			key, _, kerr := s.walletKey(wl.ID)
 			if kerr != nil {
 				res.Error = "key: " + kerr.Error()
 				return
 			}
-			px := ""
-			if n := len(proxies); n > 0 {
-				px = proxies[i%n]
-			}
-			stages, cerr := checkWalletWhitelist(r.Context(), key, common.HexToAddress(wl.Address), slug, px)
-			wipeECDSA(key)
-			if cerr != nil {
+			defer wipeECDSA(key)
+			addr := common.HexToAddress(wl.Address)
+			wctx, wcancel := context.WithTimeout(ctx, wlWalletBudget)
+			defer wcancel()
+			for attempt := 0; attempt < wlMaxAttempts; attempt++ {
+				if wctx.Err() != nil {
+					if res.Error == "" {
+						res.Error = "timed out"
+					}
+					return
+				}
+				stages, cerr := s.checkWalletWhitelist(wctx, key, addr, slug, px)
+				if cerr == nil {
+					res.OK, res.Stages, res.Error = true, stages, ""
+					return
+				}
 				res.Error = cerr.Error()
-				return
+				if !wlSleep(wctx, wlBackoff(attempt)) {
+					return
+				}
 			}
-			res.OK = true
-			res.Stages = stages
-		}(i, wl)
-	}
-	wg.Wait()
-	okN := 0
-	for _, res := range out {
-		if res.OK {
-			okN++
 		}
-	}
-	failN := len(out) - okN
-	lvl := logger.INFO
-	if failN > 0 {
-		lvl = logger.WARN
-	}
-	s.log.API(lvl, "whitelist check complete", map[string]any{"slug": slug, "eligible_checked": okN, "failed": failN, "wallets": len(targets)})
-	writeJSON(w, http.StatusOK, map[string]any{"slug": slug, "wallets": out})
+		runRound := func(wallets []store.Wallet, conc int) {
+			if conc < 1 {
+				conc = 1
+			}
+			sem := make(chan struct{}, conc)
+			var wg sync.WaitGroup
+			for i, wl := range wallets {
+				if ctx.Err() != nil {
+					break
+				}
+				wg.Add(1)
+				go func(i int, wl store.Wallet) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					px := ""
+					if n := len(proxies); n > 0 {
+						px = proxies[i%n]
+					}
+					checkOne(wl, px)
+				}(i, wl)
+			}
+			wg.Wait()
+		}
+
+		runRound(targets, threads) // round 1: everyone at the configured concurrency
+		// Retry rounds: re-check only the wallets without a result yet, at LOW concurrency so
+		// they stop competing for OpenSea's per-IP budget — that's what gets the throttled
+		// stragglers to a real result instead of staying "unchecked".
+		for round := 0; round < wlRetryRounds && ctx.Err() == nil; round++ {
+			mu.Lock()
+			var fails []store.Wallet
+			for _, wl := range targets {
+				r, ok := results[wl.ID]
+				if ok && (r.OK || strings.HasPrefix(r.Error, "key:")) {
+					continue // already done, or a permanent key-decrypt failure — don't retry
+				}
+				fails = append(fails, wl)
+			}
+			mu.Unlock()
+			if len(fails) == 0 {
+				break
+			}
+			s.log.API(logger.INFO, "whitelist retry round", map[string]any{"round": round + 1, "remaining": len(fails)})
+			wlSleep(ctx, 3*time.Second) // cool-down so the per-IP budget recovers
+			runRound(fails, wlRetryConc)
+		}
+
+		// If the parent context was cancelled mid-round, some wallets may never have run.
+		// Publish a result for each so the client reaches total/total instead of hanging.
+		mu.Lock()
+		var missing []wlResult
+		for _, wl := range targets {
+			if _, done := results[wl.ID]; !done {
+				missing = append(missing, wlResult{WalletID: wl.ID, Address: wl.Address, Label: wl.Label, Error: "cancelled"})
+			}
+		}
+		mu.Unlock()
+		for _, m := range missing {
+			publish(m)
+		}
+
+		mu.Lock()
+		ok := 0
+		for _, r := range results {
+			if r.OK {
+				ok++
+			}
+		}
+		mu.Unlock()
+		lvl := logger.INFO
+		if ok < total {
+			lvl = logger.WARN
+		}
+		s.log.API(lvl, "whitelist check complete", map[string]any{"slug": slug, "eligible_checked": ok, "failed": total - ok, "wallets": total})
+		s.hub.Publish("whitelist", map[string]any{"runId": body.RunID, "slug": slug, "total": total, "done": true, "eligible": ok})
+	}()
 }
+
+const (
+	wlMaxAttempts  = 6                // retries per wallet within its budget (bounded by wlWalletBudget)
+	wlWalletBudget = 75 * time.Second // hard cap on one wallet's total check time, so the run can't stall
+	wlRetryRounds  = 3                // extra passes over the still-unfinished wallets
+	wlRetryConc    = 2                // low concurrency for retries → less per-IP throttling, more successes
+)
 
 // resolveCollectionSlug turns an OpenSea collection link / bare slug / contract address
 // into a collection slug.
@@ -211,7 +294,7 @@ func wlHTTPClient(proxyURL string) *http.Client {
 			tr.Proxy = http.ProxyURL(pu)
 		}
 	}
-	return &http.Client{Timeout: 25 * time.Second, Jar: jar, Transport: tr}
+	return &http.Client{Timeout: 15 * time.Second, Jar: jar, Transport: tr}
 }
 
 func wlBrowserHeaders(req *http.Request) {
@@ -222,9 +305,83 @@ func wlBrowserHeaders(req *http.Request) {
 	req.Header.Set("accept", "application/json")
 }
 
-// checkWalletWhitelist runs the full SIWE sign-in + eligibility query for one wallet.
-func checkWalletWhitelist(ctx context.Context, key *ecdsa.PrivateKey, addr common.Address, slug, proxyURL string) ([]wlStage, error) {
+// --- SIWE session cache: reuse a wallet's access_token across checks so we don't re-sign
+// every time. Tokens are short-lived JWTs; we honor their exp and re-auth on rejection.
+
+type wlSession struct {
+	token string
+	exp   time.Time
+}
+
+var wlTokens sync.Map // lowercased address -> wlSession (in-memory hot path over the DB)
+
+// cachedToken returns a still-valid session token for the wallet: in-memory first, then the
+// DB (so a token survives app restarts and we don't re-sign every run).
+func (s *Server) cachedToken(addr string) string {
+	if v, ok := wlTokens.Load(addr); ok {
+		ws := v.(wlSession)
+		if time.Now().Before(ws.exp.Add(-2 * time.Minute)) { // small safety margin
+			return ws.token
+		}
+		wlTokens.Delete(addr)
+	}
+	if tok, exp, ok := s.st.GetWLSession(addr); ok {
+		e := time.Unix(exp, 0)
+		if time.Now().Before(e.Add(-2 * time.Minute)) {
+			wlTokens.Store(addr, wlSession{token: tok, exp: e}) // warm the memory cache
+			return tok
+		}
+		s.st.DeleteWLSession(addr) // expired
+	}
+	return ""
+}
+
+// cacheToken persists a fresh session token to both the memory cache and the DB.
+func (s *Server) cacheToken(addr, token string) {
+	if token == "" {
+		return
+	}
+	exp := tokenExpiry(token)
+	wlTokens.Store(addr, wlSession{token: token, exp: exp})
+	_ = s.st.SaveWLSession(addr, token, exp.Unix())
+}
+
+// clearWLToken drops a rejected/expired token from memory and the DB.
+func (s *Server) clearWLToken(addr string) {
+	wlTokens.Delete(addr)
+	s.st.DeleteWLSession(addr)
+}
+
+// tokenExpiry reads the `exp` claim from a JWT access_token; falls back to 20 minutes.
+func tokenExpiry(tok string) time.Time {
+	parts := strings.Split(tok, ".")
+	if len(parts) == 3 {
+		if payload, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
+			var c struct {
+				Exp int64 `json:"exp"`
+			}
+			if json.Unmarshal(payload, &c) == nil && c.Exp > 0 {
+				return time.Unix(c.Exp, 0)
+			}
+		}
+	}
+	return time.Now().Add(20 * time.Minute)
+}
+
+// checkWalletWhitelist queries drop eligibility for one wallet. It reuses a cached SIWE
+// session token when available (no signing); only on first check or token rejection does it
+// run the full SIWE sign-in (nonce → sign → verify).
+func (s *Server) checkWalletWhitelist(ctx context.Context, key *ecdsa.PrivateKey, addr common.Address, slug, proxyURL string) ([]wlStage, error) {
 	hc := wlHTTPClient(proxyURL)
+	lc := strings.ToLower(addr.Hex())
+
+	if tok := s.cachedToken(lc); tok != "" {
+		if stages, err := dropEligibility(ctx, hc, slug, addr, tok); err == nil {
+			return stages, nil
+		}
+		s.clearWLToken(lc) // cached token rejected/expired — fall back to a fresh sign-in
+	}
+
 	nonce, err := siweNonce(ctx, hc)
 	if err != nil {
 		return nil, fmt.Errorf("nonce: %w", err)
@@ -246,6 +403,7 @@ func checkWalletWhitelist(ctx context.Context, key *ecdsa.PrivateKey, addr commo
 			}
 		}
 	}
+	s.cacheToken(lc, token)
 	return dropEligibility(ctx, hc, slug, addr, token)
 }
 
@@ -321,7 +479,7 @@ func siweVerify(ctx context.Context, hc *http.Client, msgObj map[string]any, sig
 // 4xx) are returned with their status; only the transport/exhaustion case sets err.
 func wlDo(ctx context.Context, hc *http.Client, build func() (*http.Request, error)) ([]byte, int, error) {
 	var lastErr error
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := 0; attempt < 4; attempt++ {
 		if ctx.Err() != nil {
 			return nil, 0, ctx.Err()
 		}
