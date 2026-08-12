@@ -184,13 +184,17 @@ func TestCanPreArm(t *testing.T) {
 	if !canPreArm(TaskConfig{Mode: ModeAction}) {
 		t.Fatal("plain action task should pre-arm")
 	}
-	if canPreArm(TaskConfig{Seadrop: true}) {
-		t.Fatal("seadrop must not pre-arm (voucher is stage-gated)")
+	if !canPreArm(TaskConfig{Seadrop: true}) {
+		t.Fatal("seadrop should pre-arm (on-chain mintPublic path; voucher stays T0-only)")
 	}
 	if canPreArm(TaskConfig{Flashbots: true}) {
 		t.Fatal("flashbots must not pre-arm (targets head block at send)")
 	}
-	if canPreArm(TaskConfig{WalletOverrides: map[int64]TaskConfig{7: {Seadrop: true}}}) {
-		t.Fatal("seadrop wallet override must not pre-arm")
+	if canPreArm(TaskConfig{WalletOverrides: map[int64]TaskConfig{7: {Flashbots: true}}}) {
+		t.Fatal("flashbots wallet override must not pre-arm")
+	}
+	// A stale flashbots override for a wallet NOT in this task must not disable pre-arm.
+	if !canPreArm(TaskConfig{WalletIDs: []int64{1}, WalletOverrides: map[int64]TaskConfig{7: {Flashbots: true}}}) {
+		t.Fatal("stale override for a removed wallet must not disable pre-arm")
 	}
 }

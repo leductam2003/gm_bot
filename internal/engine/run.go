@@ -459,11 +459,13 @@ func affordableGasLimit(bal, value, maxFee *big.Int, want uint64) uint64 {
 	return want
 }
 
-// canPreArm reports whether a task can be fully prepared ahead of StartAt: SeaDrop
-// vouchers are stage-gated server-side and Flashbots targets the head block at send
-// time, so neither can pre-sign.
+// canPreArm reports whether a task can be fully prepared ahead of StartAt. Only
+// Flashbots can't (it targets the head block at send time). SeaDrop CAN: the
+// voucher is stage-gated server-side, so pre-arm signs the on-chain mintPublic
+// path instead — prepOne(early) gates on the public stage actually opening at
+// StartAt, and wallets that don't qualify fall back to the voucher at T0.
 func canPreArm(cfg TaskConfig) bool {
-	if cfg.Seadrop || cfg.Flashbots {
+	if cfg.Flashbots {
 		return false
 	}
 	// Only overrides for wallets actually in this task matter — stale override
@@ -476,7 +478,7 @@ func canPreArm(cfg TaskConfig) bool {
 		if len(want) > 0 && !want[id] {
 			continue
 		}
-		if ov.Seadrop || ov.Flashbots {
+		if ov.Flashbots {
 			return false
 		}
 	}
@@ -686,34 +688,27 @@ func (e *Engine) prepOne(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, v
 		if qty < 1 {
 			qty = 1
 		}
-		// Prefer the OpenSea voucher: a server-signed mint tx that works for BOTH the
-		// public AND allowlist/FCFS stages (OpenSea returns the active eligible stage
-		// for this wallet). Falls back to on-chain mintPublic if the voucher is
-		// unavailable (e.g. stage not open yet, or GraphQL hash rotated).
-		chainSlug, _ := chains.SlugFromChainID(cfg.ChainID)
-		proxyURL := ""
-		rt.mu.Lock()
-		if n := len(rt.proxies); n > 0 {
-			proxyURL = rt.proxies[int(lw.id)%n] // rotate proxy per wallet
+		var feeOverride common.Address
+		if cfg.FeeRecipient != "" {
+			feeOverride = common.HexToAddress(cfg.FeeRecipient)
 		}
-		rt.mu.Unlock()
-		v, verr := e.osc.MintVoucher(ctx, lw.addr.Hex(), to.Hex(), qty, chainSlug, proxyURL)
-		if verr == nil && common.IsHexAddress(v.To) && len(common.FromHex(v.Data)) > 0 {
-			to = common.HexToAddress(v.To)
-			data = common.FromHex(v.Data)
-			value = parseBigOr0(v.ValueWei)
-		} else {
-			var feeOverride common.Address
-			if cfg.FeeRecipient != "" {
-				feeOverride = common.HexToAddress(cfg.FeeRecipient)
-			}
+		if early {
+			// Pre-arm can't use the voucher — OpenSea only signs one once the stage is
+			// open. Sign the on-chain mintPublic path instead, but ONLY when the stage
+			// opening at StartAt is the public drop itself; an allowlist/FCFS snipe (or
+			// a missing/ended public stage) stays unarmed and mints via the voucher in
+			// the T0 leftover pass. (2026-08-12 GM drop: voucher+resolve+estimate+nonce
+			// after T0 landed the fleet 3-6s past open on a 100ms-block chain.)
 			r, rerr := evm.ResolveSeaDrop(ctx, client, to, qty, feeOverride)
 			if rerr != nil {
-				detail := "seadrop: " + rerr.Error()
-				if verr != nil {
-					detail = "seadrop voucher: " + verr.Error() + "; onchain: " + rerr.Error()
-				}
-				fail(detail)
+				fail("seadrop pre-arm: " + rerr.Error())
+				return nil, false
+			}
+			d := r.Drop
+			if d.StartTime == 0 || int64(d.StartTime) > cfg.StartAt || (d.EndTime != 0 && int64(d.EndTime) <= cfg.StartAt) {
+				rt.setWallet(lw.id, func(w *WalletStatus) { w.Status = "waiting"; w.Detail = "public stage not open at start — voucher at T0" })
+				e.log.Tx(logger.INFO, "pre-arm skipped: public stage not open at StartAt", cfg.ID, lw.addr.Hex(), nil)
+				e.emit(rt)
 				return nil, false
 			}
 			to, data, value = r.To, r.Data, r.Value
@@ -721,6 +716,41 @@ func (e *Engine) prepOne(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, v
 			if cfg.MintPriceWei != "" {
 				if p, ok := new(big.Int).SetString(cfg.MintPriceWei, 10); ok {
 					value = new(big.Int).Mul(p, big.NewInt(int64(qty)))
+				}
+			}
+		} else {
+			// Prefer the OpenSea voucher: a server-signed mint tx that works for BOTH the
+			// public AND allowlist/FCFS stages (OpenSea returns the active eligible stage
+			// for this wallet). Falls back to on-chain mintPublic if the voucher is
+			// unavailable (e.g. stage not open yet, or GraphQL hash rotated).
+			chainSlug, _ := chains.SlugFromChainID(cfg.ChainID)
+			proxyURL := ""
+			rt.mu.Lock()
+			if n := len(rt.proxies); n > 0 {
+				proxyURL = rt.proxies[int(lw.id)%n] // rotate proxy per wallet
+			}
+			rt.mu.Unlock()
+			v, verr := e.osc.MintVoucher(ctx, lw.addr.Hex(), to.Hex(), qty, chainSlug, proxyURL)
+			if verr == nil && common.IsHexAddress(v.To) && len(common.FromHex(v.Data)) > 0 {
+				to = common.HexToAddress(v.To)
+				data = common.FromHex(v.Data)
+				value = parseBigOr0(v.ValueWei)
+			} else {
+				r, rerr := evm.ResolveSeaDrop(ctx, client, to, qty, feeOverride)
+				if rerr != nil {
+					detail := "seadrop: " + rerr.Error()
+					if verr != nil {
+						detail = "seadrop voucher: " + verr.Error() + "; onchain: " + rerr.Error()
+					}
+					fail(detail)
+					return nil, false
+				}
+				to, data, value = r.To, r.Data, r.Value
+				// Optional per-unit price override (editable Price/NFT in the UI).
+				if cfg.MintPriceWei != "" {
+					if p, ok := new(big.Int).SetString(cfg.MintPriceWei, 10); ok {
+						value = new(big.Int).Mul(p, big.NewInt(int64(qty)))
+					}
 				}
 			}
 		}
@@ -750,6 +780,12 @@ func (e *Engine) prepOne(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, v
 	usedFallback := false
 	if cfg.Gas.GasLimit != nil {
 		gasLimit = *cfg.Gas.GasLimit
+	} else if early && cfg.Seadrop {
+		// A not-yet-open SeaDrop stage ALWAYS reverts estimateGas — skip the doomed
+		// round-trip (200 wallets = 200 wasted RPCs + WARN spam at T-15s) and take
+		// the padded fallback (balance-capped below) directly.
+		gasLimit = armedFallbackGasLimit
+		usedFallback = true
 	} else {
 		pad := evm.DefaultEstimatePad
 		if cfg.Gas.EstimatePad != nil {

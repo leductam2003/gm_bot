@@ -1079,7 +1079,16 @@ async function resolveTaskLink(){
       if($("tFn")) $("tFn").placeholder="mint(uint256)  ← not a SeaDrop, set the mint function";
     }
     toast(r.seadrop ? `SeaDrop: ${r.name||"collection"}` : `Resolved ${r.name||"contract"} — not a SeaDrop, enter the mint Function (or use Hex)`, r.seadrop?"success":"info");
-  }catch(e){ toast(e.message,"error"); }
+  }catch(e){
+    // Resolving is only auto-fill convenience — never a hard blocker. OpenSea doesn't
+    // index every chain (e.g. Robinhood) and 5xx's on brief outages; a bare CONTRACT
+    // ADDRESS resolves SeaDrop on-chain with no OpenSea, so guide the user there instead
+    // of showing a scary error that looks like the app is broken.
+    const m=String((e&&e.message)||e);
+    if(/opensea|Backend service|\b5\d\d\b/i.test(m))
+      toast("OpenSea couldn't resolve this link (chain unsupported or OpenSea is down). Paste the contract ADDRESS to detect SeaDrop on-chain.","info");
+    else toast(m,"error");
+  }
 }
 function pickMode(m){
   if(m==="action") m="instant"; // legacy tasks stored before the Action→Instant rename

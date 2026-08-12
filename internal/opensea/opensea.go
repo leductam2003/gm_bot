@@ -103,12 +103,16 @@ func (c *Client) doRotating(ctx context.Context, method, path string, body []byt
 		rb, _ := io.ReadAll(resp.Body)
 		wait := retryAfterDur(resp)
 		resp.Body.Close()
-		if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 {
+		// Retryable: 429/401/403 (throttled or bad key → wait then rotate key) and the
+		// transient gateway 5xx (502/503/504) OpenSea returns during brief outages — a
+		// hard fail there would abort a task resolve that a short backoff recovers.
+		if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 ||
+			resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
 			lastBody, lastStatus, lastErr = rb, resp.StatusCode, fmt.Errorf("opensea %d: %s", resp.StatusCode, snip(rb))
 			if wait <= 0 {
 				wait = backoffDur(i)
 			}
-			if !sleepCtx(ctx, wait) { // throttled/bad key — wait, then rotate + retry
+			if !sleepCtx(ctx, wait) {
 				return lastBody, lastStatus, ctx.Err()
 			}
 			continue
