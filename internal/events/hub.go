@@ -38,7 +38,11 @@ func (h *Hub) Publish(typ string, data any) {
 
 // Subscribe returns a receive channel and an unsubscribe func.
 func (h *Hub) Subscribe() (<-chan Envelope, func()) {
-	s := &sub{ch: make(chan Envelope, 256)}
+	// 2048-deep: at 1000 tasks the coalescer can emit thousands of frames/sec in a
+	// fire burst; a shallow buffer would drop a task's FINAL snapshot and leave it
+	// stuck showing a stale status until reload. ponytail: fixed buffer, no periodic
+	// full-state resync — add one if terminal frames still drop at 1000-task scale.
+	s := &sub{ch: make(chan Envelope, 2048)}
 	h.mu.Lock()
 	h.subs[s] = struct{}{}
 	h.mu.Unlock()

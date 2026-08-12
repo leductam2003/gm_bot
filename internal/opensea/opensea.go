@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,11 +25,25 @@ import (
 const base = "https://api.opensea.io/api/v2"
 
 type Client struct {
-	hc     *http.Client
-	keyIdx atomic.Uint64 // round-robin cursor across the configured OpenSea keys
+	hc           *http.Client
+	keyIdx       atomic.Uint64 // round-robin cursor across the configured OpenSea keys
+	proxyClients sync.Map      // proxyURL -> *http.Client, reused across voucher polls
 }
 
-func New() *Client { return &Client{hc: &http.Client{Timeout: 15 * time.Second}} }
+// osTransport keeps a real keep-alive pool to OpenSea's hosts: with the default
+// transport (2 idle conns/host) a thousand concurrent voucher polls handshake
+// from scratch nearly every call.
+var osTransport = &http.Transport{
+	Proxy:               http.ProxyFromEnvironment,
+	MaxIdleConns:        256,
+	MaxIdleConnsPerHost: 64,
+	IdleConnTimeout:     90 * time.Second,
+	TLSHandshakeTimeout: 10 * time.Second,
+}
+
+func New() *Client {
+	return &Client{hc: &http.Client{Timeout: 15 * time.Second, Transport: osTransport}}
+}
 
 // NewWithClient builds a Client over a caller-provided http.Client (e.g. one with a
 // proxy transport), so OpenSea API calls can be routed through different IPs to dodge

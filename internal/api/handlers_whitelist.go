@@ -596,6 +596,133 @@ func dropEligibility(ctx context.Context, hc *http.Client, slug string, addr com
 	return r.Data.DropBySlug.Stages, nil
 }
 
+const dropStagesQuery = `query DropStagesQuery($collectionSlug: String!) {
+  dropBySlug(slug: $collectionSlug) {
+    __typename
+    stages { stageType stageIndex maxTotalMintableByWallet }
+  }
+}`
+
+// dropStageLimits fetches each mint stage's per-wallet cap (maxTotalMintableByWallet)
+// straight from OpenSea — this is the launchpad's headline "LIMIT N PER WALLET". Unlike
+// per-wallet eligibility, it's public drop config, so a plain unauthenticated query works
+// (no SIWE sign-in). Best-effort: returns stageIndex -> limit, empty on any failure so the
+// caller keeps its on-chain fallback.
+func dropStageLimits(ctx context.Context, slug string) map[int]int {
+	out := map[int]int{}
+	if slug == "" {
+		return out
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"operationName": "DropStagesQuery",
+		"query":         dropStagesQuery,
+		"variables":     map[string]any{"collectionSlug": slug},
+	})
+	hc := wlHTTPClient("")
+	b, status, err := wlDo(ctx, hc, func() (*http.Request, error) {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://gql.opensea.io/graphql", bytes.NewReader(payload))
+		req.Header.Set("origin", "https://opensea.io")
+		req.Header.Set("referer", "https://opensea.io/")
+		req.Header.Set("user-agent", wlUA)
+		req.Header.Set("x-app-id", "os2-web")
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("accept", "application/graphql-response+json, application/json")
+		return req, nil
+	})
+	if err != nil || status >= 400 {
+		return out
+	}
+	var r struct {
+		Data struct {
+			DropBySlug struct {
+				Stages []wlStage `json:"stages"`
+			} `json:"dropBySlug"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(b, &r) != nil {
+		return out
+	}
+	for _, st := range r.Data.DropBySlug.Stages {
+		if st.Max > 0 {
+			out[st.StageIndex] = st.Max
+		}
+	}
+	return out
+}
+
+// chainIDFromIdentifier maps an OpenSea chain identifier (e.g. "ethereum", "base",
+// "robinhood") to a chain ID. It checks the built-in registry first, then the user's
+// custom chains (app.config "customChains") by name — so a mint on a custom chain the
+// app only knows locally still auto-selects the right network instead of defaulting to
+// whatever was in the Chain box.
+func (s *Server) chainIDFromIdentifier(ident string) (int, bool) {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return 0, false
+	}
+	if id, ok := chains.ChainIDFromSlug(ident); ok {
+		return id, true
+	}
+	norm := func(x string) string { return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(x), " ", "")) }
+	target := norm(ident)
+	if target == "" {
+		return 0, false
+	}
+	v, err := s.st.GetSetting("app.config")
+	if err != nil || v == "" {
+		return 0, false
+	}
+	var m struct {
+		CustomChains []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"customChains"`
+	}
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return 0, false
+	}
+	for _, cc := range m.CustomChains {
+		if cc.ID == 0 {
+			continue
+		}
+		n := norm(cc.Name)
+		if n != "" && (n == target || strings.HasPrefix(n, target) || strings.HasPrefix(target, n)) {
+			return cc.ID, true
+		}
+	}
+	return 0, false
+}
+
+// openSeaChainSlug returns the OpenSea chain slug for a chainID — the built-in registry
+// slug, or (for a user-defined custom chain) its name normalized to a slug. This lets
+// contract->collection resolution and mint-phase fetching work on custom chains the
+// registry doesn't know (e.g. Robinhood → "robinhood"), instead of failing outright and
+// leaving the task with no phases / a zero start time.
+func (s *Server) openSeaChainSlug(chainID int) (string, bool) {
+	if sl, err := chains.SlugFromChainID(chainID); err == nil && sl != "" {
+		return sl, true
+	}
+	v, err := s.st.GetSetting("app.config")
+	if err != nil || v == "" {
+		return "", false
+	}
+	var m struct {
+		CustomChains []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"customChains"`
+	}
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return "", false
+	}
+	for _, cc := range m.CustomChains {
+		if cc.ID == chainID && strings.TrimSpace(cc.Name) != "" {
+			return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(cc.Name), " ", "")), true
+		}
+	}
+	return "", false
+}
+
 func snipB(b []byte) string {
 	s := strings.TrimSpace(string(b))
 	if len(s) > 160 {

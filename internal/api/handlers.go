@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 
 	"zyperbot/internal/chains"
 	"zyperbot/internal/config"
@@ -124,31 +125,56 @@ func (s *Server) handleImportWallets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"added": added})
 }
 
-// persistKeys seals each private key with the vault and inserts the wallet rows.
+// persistKeys seals each private key with the vault and inserts the wallet rows
+// in a single batched transaction, so bulk generate/import stays fast (and never
+// trips the API request timeout) even for hundreds or thousands of wallets.
 func (s *Server) persistKeys(keys []wallet.Key, label, group string) (int, error) {
 	if group == "" {
 		group = "default"
 	}
-	added := 0
-	for i, k := range keys {
+	if label == "" {
+		label = "wallet"
+	}
+	ws := make([]store.Wallet, 0, len(keys))
+	for _, k := range keys {
 		enc, err := s.vault.Seal([]byte(k.PrivKeyHex))
 		if err != nil {
-			return added, err
+			return 0, err
 		}
-		lbl := label
-		if lbl == "" {
-			lbl = "wallet"
-		}
-		_ = i
-		if _, err := s.st.AddWallet(store.Wallet{
-			Label: lbl, Network: "evm", Address: k.Address, EncPrivKey: enc, GroupName: group,
-		}); err != nil {
-			// Skip duplicates (UNIQUE constraint) but keep going.
-			continue
-		}
-		added++
+		ws = append(ws, store.Wallet{
+			Label: label, Network: "evm", Address: k.Address, EncPrivKey: enc, GroupName: group,
+		})
 	}
-	return added, nil
+	// Duplicates are skipped inside the batch (INSERT OR IGNORE); added = new rows.
+	return s.st.AddWallets(ws)
+}
+
+// POST /api/wallets/rename {ids:[], label} — set the display label on one or many
+// wallets (rows render as "<label>-<id>", so bulk renames stay distinguishable).
+func (s *Server) handleRenameWallets(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs   []int64 `json:"ids"`
+		Label string  `json:"label"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	label := strings.TrimSpace(body.Label)
+	if label == "" || len(label) > 64 {
+		writeErr(w, http.StatusBadRequest, "label must be 1-64 characters")
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest, "no wallet ids")
+		return
+	}
+	n, err := s.st.RenameWallets(body.IDs, label)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"renamed": n})
 }
 
 // DELETE /api/wallets/{id}

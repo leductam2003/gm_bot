@@ -8,6 +8,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"zyperbot/internal/evm"
 )
@@ -16,10 +17,15 @@ import (
 type Mode string
 
 const (
-	ModeSimulate Mode = "simulate" // eth_call only, no gas spent
-	ModeSpam     Mode = "spam"     // repeat Action until stopped
-	ModeAction   Mode = "action"   // send once per wallet
+	ModeSimulate Mode = "simulate" // eth_call preflight; send only if it would succeed (+RetryUntilSuccess loops the preflight)
+	ModeSpam     Mode = "spam"     // fire-and-forget, incrementing the nonce each send, until stopped (no preflight)
+	ModeInstant  Mode = "instant"  // send immediately, no preflight
+	ModeAction   Mode = "action"   // DEPRECATED alias of Instant, kept so tasks stored before the rename still run
 )
+
+// isInstant reports whether a mode sends straight away with no preflight (Instant, or
+// its legacy "action" alias).
+func (m Mode) isInstant() bool { return m == ModeInstant || m == ModeAction }
 
 // TaskConfig is the persisted task definition (stored as JSON).
 type TaskConfig struct {
@@ -49,6 +55,10 @@ type TaskConfig struct {
 	NonceOverride   *uint64       `json:"nonceOverride,omitempty"`
 	DelayMs         int           `json:"delayMs"`
 	SpamGuardrailMs int           `json:"spamGuardrailMs"`
+	// RetryUntilSuccess (Simulate mode): keep re-running the eth_call preflight until it
+	// passes, then send — instead of failing the wallet on the first revert. Used to sit
+	// on a mint that is not open yet and fire the instant it becomes mintable.
+	RetryUntilSuccess bool `json:"retryUntilSuccess"`
 	Preflight       bool          `json:"preflight"` // action: eth_call before send
 	Flashbots       bool          `json:"flashbots"`   // ETH mainnet: send via private bundle (anti-frontrun)
 	PostAction      *PostAction   `json:"postAction,omitempty"` // chained follow-up after a successful action
@@ -107,6 +117,16 @@ type TaskRuntime struct {
 	cancel       context.CancelFunc           // whole-task run
 	walletCancel map[int64]context.CancelFunc // per-wallet runs (one row's ▶ button)
 	pumpEpoch    atomic.Int64
+	// runGen tags each whole-task run. Stop→Start can spawn a new runner while the old
+	// one is still unwinding a cancelled RPC; the old runner must NOT write terminal
+	// status/idle over the new run. Each Start bumps it; a runner only finalizes if its
+	// captured gen is still current.
+	runGen atomic.Int64
+
+	// snapshot-emit coalescing (see Engine.emit): at most one WS push per gap.
+	emitMu    sync.Mutex
+	lastEmit  time.Time
+	emitTimer *time.Timer
 }
 
 func newRuntime(cfg TaskConfig) *TaskRuntime {

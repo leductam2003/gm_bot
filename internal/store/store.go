@@ -47,6 +47,18 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // sqlite: single writer avoids "database is locked"
+	// Best-effort pragmas: WAL journaling makes bursts of small writes (task status
+	// flips when hundreds of tasks start at once) far cheaper than the default
+	// rollback journal's fsync-per-txn; NORMAL sync is safe with WAL; the busy
+	// timeout absorbs transient lock contention instead of erroring. journal_mode
+	// persists in the DB file; the others apply to our single pooled connection.
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL", "PRAGMA busy_timeout=5000",
+	} {
+		if rows, err := db.Query(pragma); err == nil {
+			rows.Close()
+		}
+	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		return nil, err
@@ -130,6 +142,44 @@ func (s *Store) AddWallet(w Wallet) (int64, error) {
 	return res.LastInsertId()
 }
 
+// AddWallets inserts many wallets in a single transaction — one fsync for the
+// whole batch instead of one per row. This keeps bulk generate/import fast
+// (hundreds/thousands of wallets stay well under the API request timeout).
+// Duplicates (same network+address) are skipped via INSERT OR IGNORE; the
+// returned count is the number of NEW rows actually inserted.
+func (s *Store) AddWallets(ws []Wallet) (int, error) {
+	if len(ws) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO wallets(label,network,address,enc_privkey,group_name,proxy_url,created_at)
+		 VALUES(?,?,?,?,?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+	now := time.Now().Unix()
+	added := 0
+	for _, w := range ws {
+		res, err := stmt.Exec(w.Label, w.Network, w.Address, w.EncPrivKey, w.GroupName, w.ProxyURL, now)
+		if err != nil {
+			return 0, err // rollback discards every row — report what actually persisted
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			added++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
 func (s *Store) ListWallets() ([]Wallet, error) {
 	rows, err := s.db.Query(
 		`SELECT id,label,network,address,enc_privkey,group_name,proxy_url,created_at
@@ -169,6 +219,39 @@ func (s *Store) GetWallet(id int64) (Wallet, error) {
 func (s *Store) DeleteWallet(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM wallets WHERE id=?`, id)
 	return err
+}
+
+// RenameWallets sets the display label on the given wallets in one transaction.
+// Returns how many rows actually changed. (Rows display as "<label>-<id>", so a
+// shared label keeps every wallet distinct.)
+func (s *Store) RenameWallets(ids []int64, label string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`UPDATE wallets SET label=? WHERE id=?`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+	renamed := 0
+	for _, id := range ids {
+		res, err := stmt.Exec(label, id)
+		if err != nil {
+			return 0, err // rollback discards every row — report what actually persisted
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			renamed++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return renamed, nil
 }
 
 // --- rpc endpoints ---

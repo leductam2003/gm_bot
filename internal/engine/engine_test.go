@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
 	"math/big"
+	"strings"
 	"testing"
+	"time"
 
 	"zyperbot/internal/evm"
 )
@@ -59,8 +62,135 @@ func TestWeiToEth(t *testing.T) {
 	}
 }
 
+func TestRedactErr(t *testing.T) {
+	// go-ethereum transport errors embed the full RPC URL whose path can be a secret
+	// token — the redaction must strip it to host-only before it hits the UI/log.
+	in := `Post "https://hood.allnodes.me:8547/xZli7t7St0qt23lp": dial tcp: timeout`
+	out := redactErr(in)
+	if strings.Contains(out, "xZli7t7St0qt23lp") {
+		t.Fatalf("secret token survived redaction: %s", out)
+	}
+	if !strings.Contains(out, "hood.allnodes.me:8547") {
+		t.Fatalf("host should remain for diagnosis: %s", out)
+	}
+	// http and multiple URLs
+	if got := redactErr(`x http://a.b/SECRET y https://c.d/KEY z`); strings.Contains(got, "SECRET") || strings.Contains(got, "KEY") {
+		t.Fatalf("token survived: %s", got)
+	}
+	// no URL → unchanged
+	if got := redactErr("nonce too low"); got != "nonce too low" {
+		t.Fatalf("plain message altered: %s", got)
+	}
+}
+
 func TestShortURL(t *testing.T) {
 	if got := shortURL("https://eth-mainnet.g.alchemy.com/v2/KEY123"); got != "eth-mainnet.g.alchemy.com" {
 		t.Fatalf("shortURL=%s", got)
+	}
+}
+
+func TestWaitUntilLandsOnBoundary(t *testing.T) {
+	// The snipe wake-up must land ON the target second, not up to ~1s past it.
+	sec := time.Now().Unix() + 2
+	if !waitUntil(context.Background(), sec) {
+		t.Fatal("waitUntil returned false without cancellation")
+	}
+	late := time.Since(time.Unix(sec, 0))
+	if late < 0 {
+		t.Fatalf("woke %s BEFORE the target second", -late)
+	}
+	if late > 500*time.Millisecond {
+		t.Fatalf("woke %s after the target second (want < 500ms)", late)
+	}
+}
+
+func TestWaitUntilCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	start := time.Now()
+	if waitUntil(ctx, time.Now().Unix()+60) {
+		t.Fatal("expected false on cancel")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("cancel took too long to unblock the wait")
+	}
+}
+
+func TestAffordableGasLimit(t *testing.T) {
+	gwei := func(n int64) *big.Int { return new(big.Int).Mul(big.NewInt(n), big.NewInt(1e9)) }
+	eth := func(f float64) *big.Int { w, _ := new(big.Float).Mul(big.NewFloat(f), big.NewFloat(1e18)).Int(nil); return w }
+	maxFee := gwei(50)
+	const want = 500_000
+
+	// Well-funded: cap does not lower the 500k fallback.
+	if g := affordableGasLimit(eth(1), eth(0.05), maxFee, want); g != want {
+		t.Fatalf("well-funded: got %d want %d", g, want)
+	}
+	// Tightly funded: value 0.05 + room for exactly 150k gas. Must cap to 150k so the
+	// SIGNED tx (value + 150k*maxFee) is still <= balance — the T0-rejection bug.
+	bal := new(big.Int).Add(eth(0.05), new(big.Int).Mul(big.NewInt(150_000), maxFee))
+	if g := affordableGasLimit(bal, eth(0.05), maxFee, want); g != 150_000 {
+		t.Fatalf("tight: got %d want 150000", g)
+	}
+	// Verify the capped tx is actually admissible: value + g*maxFee <= bal.
+	if g := affordableGasLimit(bal, eth(0.05), maxFee, want); new(big.Int).Add(eth(0.05), new(big.Int).Mul(big.NewInt(int64(g)), maxFee)).Cmp(bal) > 0 {
+		t.Fatal("capped tx exceeds balance — would be rejected at broadcast")
+	}
+	// Can't cover the value at all → 0 (floor benches it).
+	if g := affordableGasLimit(eth(0.01), eth(0.05), maxFee, want); g != 0 {
+		t.Fatalf("underfunded: got %d want 0", g)
+	}
+	// Zero maxFee (manual gas edge) → passthrough, no divide-by-zero.
+	if g := affordableGasLimit(eth(1), eth(0), big.NewInt(0), want); g != want {
+		t.Fatalf("zero maxFee: got %d want %d", g, want)
+	}
+}
+
+func TestArmLeadSpread(t *testing.T) {
+	// Leads must stay within [armLeadSec, armLeadSec+armSpreadSec) and actually
+	// spread — 1000 tasks waking at the same instant is the failure being prevented.
+	seen := map[int64]bool{}
+	for id := int64(0); id < 1000; id++ {
+		l := armLeadFor(id)
+		if l < armLeadSec || l >= armLeadSec+armSpreadSec {
+			t.Fatalf("armLeadFor(%d)=%d out of range", id, l)
+		}
+		seen[l] = true
+	}
+	if len(seen) < armSpreadSec {
+		t.Fatalf("leads not spread: only %d distinct values", len(seen))
+	}
+	if armLeadFor(-7) != armLeadFor(7) {
+		t.Fatal("negative id must not underflow the lead")
+	}
+}
+
+func TestModeIsInstant(t *testing.T) {
+	// "action" is the legacy alias for Instant — tasks persisted before the rename
+	// must keep sending straight away, and only these two modes may skip preflight.
+	for _, m := range []Mode{ModeInstant, ModeAction} {
+		if !m.isInstant() {
+			t.Fatalf("%s should be instant", m)
+		}
+	}
+	for _, m := range []Mode{ModeSimulate, ModeSpam, Mode("")} {
+		if m.isInstant() {
+			t.Fatalf("%s should NOT be instant", m)
+		}
+	}
+}
+
+func TestCanPreArm(t *testing.T) {
+	if !canPreArm(TaskConfig{Mode: ModeAction}) {
+		t.Fatal("plain action task should pre-arm")
+	}
+	if canPreArm(TaskConfig{Seadrop: true}) {
+		t.Fatal("seadrop must not pre-arm (voucher is stage-gated)")
+	}
+	if canPreArm(TaskConfig{Flashbots: true}) {
+		t.Fatal("flashbots must not pre-arm (targets head block at send)")
+	}
+	if canPreArm(TaskConfig{WalletOverrides: map[int64]TaskConfig{7: {Seadrop: true}}}) {
+		t.Fatal("seadrop wallet override must not pre-arm")
 	}
 }

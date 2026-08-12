@@ -54,35 +54,41 @@ func gqlHeaders(req *http.Request, op string) {
 
 // Stage is one SeaDrop mint phase.
 type Stage struct {
-	Index     int    `json:"index"`
-	Kind      string `json:"kind"` // "public" | "allowlist"
-	StartUnix int64  `json:"startUnix"`
-	EndUnix   int64  `json:"endUnix"`
-	PriceWei  string `json:"priceWei"`
-	PriceEth  string `json:"priceEth"`
+	Index        int    `json:"index"`
+	Kind         string `json:"kind"` // "public" | "allowlist"
+	StartUnix    int64  `json:"startUnix"`
+	EndUnix      int64  `json:"endUnix"`
+	PriceWei     string `json:"priceWei"`
+	PriceEth     string `json:"priceEth"`
+	MaxPerWallet int    `json:"maxPerWallet"` // per-wallet cap for this phase (0 = unknown)
 }
 
-// MintStages returns all mint phases for a collection slug, sorted by start time.
-// Empty (no error) when the collection isn't an OpenSea SeaDrop with stages.
-func (c *Client) MintStages(ctx context.Context, slug string) ([]Stage, error) {
+// MintStages returns the collection's OpenSea chain identifier plus all mint phases
+// (public + allowlist) for a slug, sorted by start time. Empty (no error) when the
+// collection isn't an OpenSea SeaDrop with stages. The chain identifier (e.g.
+// "ethereum", "base", "robinhood") lets the caller target the right network.
+func (c *Client) MintStages(ctx context.Context, slug string) (string, []Stage, error) {
 	q := url.Values{}
 	q.Set("operationName", "MintQuery")
 	q.Set("variables", `{"slug":"`+slug+`"}`)
 	q.Set("extensions", `{"persistedQuery":{"sha256Hash":"`+mintQueryHash()+`","version":1}}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openseaGQL+"?"+q.Encode(), nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	gqlHeaders(req, "MintQuery")
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	var r struct {
 		Data struct {
 			CollectionBySlug struct {
+				Chain struct {
+					Identifier string `json:"identifier"`
+				} `json:"chain"`
 				Drop struct {
 					Stages []struct {
 						StageIndex int    `json:"stageIndex"`
@@ -99,7 +105,7 @@ func (c *Client) MintStages(ctx context.Context, slug string) ([]Stage, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var out []Stage
 	for _, s := range r.Data.CollectionBySlug.Drop.Stages {
@@ -123,7 +129,7 @@ func (c *Client) MintStages(ctx context.Context, slug string) ([]Stage, error) {
 			out[j], out[j-1] = out[j-1], out[j]
 		}
 	}
-	return out, nil
+	return r.Data.CollectionBySlug.Chain.Identifier, out, nil
 }
 
 // Voucher is a ready-to-send mint transaction from OpenSea (signature embedded).
@@ -136,16 +142,27 @@ type Voucher struct {
 // MintVoucher fetches the ready mint tx for `minter` on a collection contract. Works
 // for public + allowlist/FCFS (OpenSea returns the active eligible stage). chainSlug
 // is the OpenSea chain slug (e.g. "ethereum", "base").
-// httpClient returns the shared client, or a per-call client routed through proxyURL
-// (for poll/snipe across many wallets without an IP ban).
+// httpClient returns the shared client, or a cached per-proxy client routed through
+// proxyURL (for poll/snipe across many wallets without an IP ban). Clients are cached
+// per proxy so repeated polls reuse connections instead of re-handshaking every call.
 func (c *Client) httpClient(proxyURL string) *http.Client {
 	if proxyURL == "" {
 		return c.hc
 	}
-	if pu, err := url.Parse(proxyURL); err == nil {
-		return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
+	if v, ok := c.proxyClients.Load(proxyURL); ok {
+		return v.(*http.Client)
 	}
-	return c.hc
+	pu, err := url.Parse(proxyURL)
+	if err != nil {
+		return c.hc
+	}
+	hc := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{
+		Proxy:               http.ProxyURL(pu),
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     90 * time.Second,
+	}}
+	actual, _ := c.proxyClients.LoadOrStore(proxyURL, hc)
+	return actual.(*http.Client)
 }
 
 func (c *Client) MintVoucher(ctx context.Context, minter, nftContract string, qty int, chainSlug, proxyURL string) (Voucher, error) {

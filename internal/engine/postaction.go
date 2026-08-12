@@ -42,6 +42,11 @@ func (e *Engine) runPostAction(ctx context.Context, rt *TaskRuntime, cfg TaskCon
 		e.log.Tx(logger.WARN, "post-action nonce: "+nerr.Error(), cfg.ID, lw.addr.Hex(), nil)
 		return
 	}
+	// Gas the earlier sends in this chain reserve but haven't spent yet: they are still
+	// pending (we never wait for a receipt), so a later drain that sizes itself from the
+	// on-chain balance must leave room for them, or geth rejects the queued drain
+	// (cumulative cost of all pending nonces > balance) and the ETH is stranded.
+	pendingGas := big.NewInt(0)
 	send := func(to common.Address, data []byte, value *big.Int, gasLimit uint64, label string) bool {
 		tx, serr := evm.SignTx(lw.key, evm.TxRequest{
 			ChainID: chainID, Nonce: nonce, To: to, Data: data, Value: value,
@@ -59,6 +64,9 @@ func (e *Engine) runPostAction(ctx context.Context, rt *TaskRuntime, cfg TaskCon
 			return false
 		}
 		nonce++ // advance for the next chained follow-up (e.g. drain after transfer)
+		// This tx is now pending on nonce N; reserve its worst-case gas for any later
+		// drain that sizes off the balance.
+		pendingGas.Add(pendingGas, new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), fees.MaxFeePerGas))
 		e.log.Tx(logger.INFO, "post-action "+label, cfg.ID, lw.addr.Hex(), map[string]any{"to": to.Hex(), "txHash": res.TxHash.Hex()})
 		rt.setWallet(lw.id, func(w *WalletStatus) { w.Detail = "mint ok · " + label + " sent" })
 		e.emit(rt)
@@ -70,17 +78,23 @@ func (e *Engine) runPostAction(ctx context.Context, rt *TaskRuntime, cfg TaskCon
 			e.log.Tx(logger.WARN, "post-action drain: invalid destination", cfg.ID, lw.addr.Hex(), nil)
 			return
 		}
+		dest := common.HexToAddress(pa.Destination)
 		bal, berr := client.BalanceAt(ctx, lw.addr, nil)
 		if berr != nil {
 			return
 		}
-		gasCost := new(big.Int).Mul(big.NewInt(21000), fees.MaxFeePerGas)
-		amt := new(big.Int).Sub(bal, gasCost)
+		// Size the native drain from the node — some custom chains need more than the
+		// 21000 intrinsic floor and reject it with "intrinsic gas too low".
+		gasLimit := evm.NativeGasLimit(ctx, client, lw.addr, dest, big.NewInt(0))
+		gasCost := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), fees.MaxFeePerGas)
+		// Leave room for THIS drain's gas AND any still-pending earlier send (e.g. the
+		// NFT transfer we just broadcast) — else the queued drain exceeds the balance.
+		amt := new(big.Int).Sub(bal, new(big.Int).Add(gasCost, pendingGas))
 		if amt.Sign() <= 0 {
 			e.log.Tx(logger.WARN, "post-action drain: balance below gas, nothing to drain", cfg.ID, lw.addr.Hex(), nil)
 			return
 		}
-		send(common.HexToAddress(pa.Destination), nil, amt, 21000, "drain ETH")
+		send(dest, nil, amt, gasLimit, "drain ETH")
 	}
 
 	switch pa.Type {

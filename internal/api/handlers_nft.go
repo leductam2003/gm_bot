@@ -236,7 +236,7 @@ func (s *Server) handleNftResolveLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		contract, name = info.Contract, info.Name
-		if id, ok := chains.ChainIDFromSlug(info.Chain); ok {
+		if id, ok := s.chainIDFromIdentifier(info.Chain); ok {
 			chainID = id
 		}
 	}
@@ -264,14 +264,49 @@ func (s *Server) handleNftResolveLink(w http.ResponseWriter, r *http.Request) {
 	// link was a raw address, resolve contract -> slug first.
 	phaseSlug := slug
 	if phaseSlug == "" {
-		if cs, ok := chains.SlugFromChainID(chainID); ok == nil {
-			if sl, e := s.osc.ContractSlug(r.Context(), cs, common.HexToAddress(contract).Hex()); e == nil {
+		// Resolve contract -> slug so we can fetch mint phases (and the real start time).
+		// OpenSea resolves largely by contract regardless of the chain segment, so try the
+		// chain's own slug first (incl. custom chains like Robinhood via openSeaChainSlug),
+		// then fall back to a known-good one. Without this a custom chain yields no phases
+		// and the task defaults to a zero "fires now" start time.
+		tryChains := []string{}
+		if cs, ok := s.openSeaChainSlug(chainID); ok {
+			tryChains = append(tryChains, cs)
+		}
+		tryChains = append(tryChains, "ethereum")
+		seen := map[string]bool{}
+		addr := common.HexToAddress(contract).Hex()
+		for _, cs := range tryChains {
+			if cs == "" || seen[cs] {
+				continue
+			}
+			seen[cs] = true
+			if sl, e := s.osc.ContractSlug(r.Context(), cs, addr); e == nil && sl != "" {
 				phaseSlug = sl
+				break
 			}
 		}
 	}
 	if phaseSlug != "" {
-		if phases, e := s.osc.MintStages(r.Context(), phaseSlug); e == nil && len(phases) > 0 {
+		if chainIdent, phases, e := s.osc.MintStages(r.Context(), phaseSlug); e == nil && len(phases) > 0 {
+			// Auto-select the chain from OpenSea (covers custom chains like Robinhood that
+			// the app only knows via customChains) so the task targets the right network.
+			if id, ok := s.chainIDFromIdentifier(chainIdent); ok && id != chainID {
+				chainID = id
+				out["chainId"] = chainID
+			}
+			// The per-wallet cap ("LIMIT N PER WALLET") lives in OpenSea's drop config,
+			// not the on-chain public drop (which can under-report it or read as 1). Attach
+			// each phase's cap and use the public stage's as the headline maxPerWallet.
+			limits := dropStageLimits(r.Context(), phaseSlug)
+			for i := range phases {
+				if m, ok := limits[phases[i].Index]; ok && m > 0 {
+					phases[i].MaxPerWallet = m
+					if phases[i].Kind == "public" {
+						out["maxPerWallet"] = m
+					}
+				}
+			}
 			out["phases"] = phases
 			out["seadrop"] = true
 			out["slug"] = phaseSlug

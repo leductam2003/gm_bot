@@ -203,6 +203,17 @@ tbody tr.rowsel:hover { background: oklch(0.84 0.11 350 / .08); }
 .actbar { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .actbar .left { color: var(--muted); font-size: 12px; font-family: var(--mono); }
 .actbar .right { display: flex; gap: 8px; align-items: center; }
+/* The wallet/NFT selection bars pin to the bottom of the viewport while shown, so
+   the Copy/Delete buttons stay reachable even with a long (200–1000-row) list —
+   no scrolling to the end of the card. Sticky within the card: floats at the
+   screen bottom when the card overflows below the fold, sits naturally at rest. */
+#walActbar, #nftActbar {
+  position: sticky; bottom: 0; z-index: 5;
+  margin: 14px -20px -18px; padding: 12px 20px;
+  background: rgba(11,15,17,.94); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius);
+  flex-wrap: wrap; gap: 8px;
+}
 
 /* ---------- keyframes ---------- */
 @keyframes zspin { to { transform: rotate(360deg); } }

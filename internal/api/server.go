@@ -46,7 +46,10 @@ func New(st *store.Store, vault *crypto.Vault, pool *rpc.Pool, eng *engine.Engin
 func (s *Server) Router(webDir string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30_000_000_000)) // 30s
+	// 120s: bulk ops (generate/import many wallets, live balances for a big group)
+	// can legitimately run longer than a few seconds. A short cap here would abort
+	// the request client-side while the server keeps working, leaving the UI stale.
+	r.Use(middleware.Timeout(120_000_000_000)) // 120s
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.authGuard)
@@ -70,6 +73,7 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Get("/wallets", s.handleListWallets)
 		r.Post("/wallets/generate", s.handleGenerateWallets)
 		r.Post("/wallets/import", s.handleImportWallets)
+		r.Post("/wallets/rename", s.handleRenameWallets)
 		r.Delete("/wallets/{id}", s.handleDeleteWallet)
 		r.Post("/wallets/reveal/{id}", s.handleRevealWallet)
 		r.Post("/wallets/reveal", s.handleRevealWalletsBulk)

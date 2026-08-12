@@ -163,6 +163,48 @@ function makeWalletSelect(containerId) {
     clear() { state.selected.clear(); updateSummary(); render(); },
   };
 }
+// Single searchable wallet picker (ONE choice) for Manage Funds — the disperse funder
+// and the consolidate destination were an unsearchable native <select> / bare address
+// box, unusable among hundreds of wallets. Reuses the .wsel dropdown styling; onPick
+// fires with the chosen wallet (or null on clear).
+function makeWalletPicker(containerId, onPick){
+  const root=$(containerId); if(!root) return null;
+  const state={ wallets:[], sel:null, q:"" };
+  root.innerHTML=`
+    <div class="wsel-box"><span class="wsel-summary">— pick a wallet —</span>
+      <svg class="i chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></div>
+    <div class="wsel-panel">
+      <div class="wsel-search"><div class="wsel-search-in">
+        <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input placeholder="Search name, #id or address…" /></div></div>
+      <div class="wsel-groups"></div>
+    </div>`;
+  const box=root.querySelector(".wsel-box"), panel=root.querySelector(".wsel-panel"),
+        search=root.querySelector("input"), listEl=root.querySelector(".wsel-groups"),
+        summary=root.querySelector(".wsel-summary");
+  box.onclick=(e)=>{ e.stopPropagation(); const open=panel.classList.toggle("show"); box.classList.toggle("open",open); if(open){ render(); search.focus(); } };
+  search.oninput=()=>{ state.q=search.value.toLowerCase().trim(); render(); };
+  panel.onclick=(e)=>e.stopPropagation();
+  document.addEventListener("click",()=>{ panel.classList.remove("show"); box.classList.remove("open"); });
+  const label=(w)=>`${w.label}-${w.id}`;
+  function updateSummary(){ summary.textContent = state.sel ? `${label(state.sel)} · ${short(state.sel.address)}` : "— pick a wallet —"; }
+  function render(){
+    const q=state.q, qid=q.replace(/^#/,"");
+    const filtered = q ? state.wallets.filter(w=> label(w).toLowerCase().includes(q) || (w.address||"").toLowerCase().includes(q) || String(w.id)===qid ) : state.wallets;
+    const shown=filtered.slice(0,200);
+    listEl.innerHTML = shown.map(w=>`<label class="wsel-item" data-wid="${w.id}" style="padding-left:11px;justify-content:space-between"><span>${escHtml(w.label)}-${w.id}</span> <span class="mono">${short(w.address)}</span></label>`).join("")
+      || `<div class="muted" style="padding:12px">No match</div>`;
+    if(filtered.length>shown.length) listEl.insertAdjacentHTML("beforeend",`<div class="muted" style="padding:8px 12px">${filtered.length-shown.length} more… refine the search</div>`);
+    listEl.querySelectorAll("[data-wid]").forEach(el=>{ el.onclick=(e)=>{ e.stopPropagation(); state.sel=state.wallets.find(x=>x.id===Number(el.dataset.wid))||null; updateSummary(); panel.classList.remove("show"); box.classList.remove("open"); if(onPick) onPick(state.sel); }; });
+  }
+  return {
+    async reload(){ try{ state.wallets=await api("/wallets"); }catch{ state.wallets=[]; } if(state.sel && !state.wallets.some(w=>w.id===state.sel.id)) state.sel=null; updateSummary(); render(); },
+    setWallets(ws){ state.wallets=ws||[]; if(state.sel && !state.wallets.some(w=>w.id===state.sel.id)) state.sel=null; updateSummary(); render(); },
+    selectedId(){ return state.sel?state.sel.id:0; },
+    selected(){ return state.sel; },
+    clear(){ state.sel=null; state.q=""; if(search) search.value=""; updateSummary(); render(); },
+  };
+}
 // RPC endpoint multi-select for the task form — mirrors the wallet selector but lists
 // RPC endpoints grouped by chain; selected() returns the chosen URLs (empty = chain default).
 function makeRpcSelect(containerId) {
@@ -343,6 +385,22 @@ let WSEL = new Set(), SEND_WID = null;
 let WALLET_GROUPS = new Set((()=>{ try { return JSON.parse(localStorage.getItem("walletGroups")||'["main"]'); } catch { return ["main"]; } })());
 function saveWGroups(){ try { localStorage.setItem("walletGroups", JSON.stringify([...WALLET_GROUPS])); } catch {} }
 async function newWGroup(){ const g=await promptDialog("New Wallet Group","Group name"); if(g){ WALLET_GROUPS.add(g); saveWGroups(); CUR_WGROUP=g; renderWallets(); toast(`Group "${g}" created — add wallets to it`,"success"); } }
+// Group picker for the Generate/Import modals: a <select> of existing wallet
+// groups plus a "＋ New group…" sentinel that reveals a text input. Pick from the
+// list by default; only type when creating a brand-new group.
+const NEW_GROUP_SENTINEL = "__new__";
+function fillGroupSelect(selId, newId, current){
+  const sel=$(selId), nw=$(newId); if(!sel) return;
+  const groups=[...WALLET_GROUPS].filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  const cur = current || CUR_WGROUP || groups[0] || "main";
+  if(cur && !groups.includes(cur)) groups.unshift(cur);
+  sel.innerHTML = groups.map(g=>`<option value="${escHtml(g)}">${escHtml(g)}</option>`).join("")
+    + `<option value="${NEW_GROUP_SENTINEL}">＋ New group…</option>`;
+  sel.value = groups.includes(cur) ? cur : (groups[0]||NEW_GROUP_SENTINEL);
+  if(nw){ nw.value=""; nw.classList.toggle("hide", sel.value!==NEW_GROUP_SENTINEL); }
+}
+function onGroupSel(selId, newId){ const sel=$(selId), nw=$(newId); if(!sel||!nw) return; const isNew=sel.value===NEW_GROUP_SENTINEL; nw.classList.toggle("hide", !isNew); if(isNew) nw.focus(); }
+function groupValue(selId, newId){ const sel=$(selId); if(!sel) return ""; if(sel.value===NEW_GROUP_SENTINEL){ const nw=$(newId); return nw?nw.value.trim():""; } return sel.value; }
 async function loadWallets() { WALLETS = await api("/wallets"); renderWallets(); }
 function pickWGroup(g){ CUR_WGROUP = (CUR_WGROUP === g) ? "" : g; renderWallets(); } // click again = show all
 function shownWallets(){ return CUR_WGROUP ? WALLETS.filter(w=>w.group===CUR_WGROUP) : WALLETS; }
@@ -364,6 +422,7 @@ function renderWallets() {
       <td class="mono">${short(w.address)} <span class="copyable" onclick="copy('${w.address}')">${IC.copy}</span></td>
       <td class="bal mono">—</td>
       <td class="acts" style="justify-content:flex-end">
+        <button class="icon" title="Rename" onclick="renameWallet(${w.id})">${IC.edit}</button>
         <button class="icon" title="Send funds" onclick="openWalSend(${w.id})">${IC.send}</button>
         <button class="icon danger" title="Delete" onclick="delWallet(${w.id})">${IC.trash}</button>
       </td></tr>`; }).join("") || `<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">No wallets in this group</td></tr>`;
@@ -384,6 +443,22 @@ async function copySelKeys(){
     if(!res.length) return toast("No keys returned","error");
     copyText(res.map(r=>r.privKey).join("\n")); toast(`Copied ${res.length} private key(s)`,"success");
   }catch(e){ toast(e.message,"error"); }
+}
+// Rename one wallet (row ✎) or every selected wallet (action bar). Rows render as
+// "<label>-<id>", so a shared label still leaves each wallet distinguishable.
+async function renameWallet(id){
+  const w=WALLETS.find(x=>x.id===id); if(!w) return;
+  const name=await promptDialog("Rename Wallet","wallet name","Rename",w.label||"");
+  if(!name) return;
+  try{ await api("/wallets/rename",{method:"POST",body:JSON.stringify({ids:[id],label:name})}); loadWallets(); toast(`Renamed to ${name}-${id}`,"success"); }
+  catch(e){ toast(e.message,"error"); }
+}
+async function renameSelWallets(){
+  const ids=[...WSEL]; if(!ids.length) return;
+  const name=await promptDialog(`Rename ${ids.length} Wallet(s)`,"base name — shows as name-id","Rename");
+  if(!name) return;
+  try{ const r=await api("/wallets/rename",{method:"POST",body:JSON.stringify({ids,label:name})}); loadWallets(); toast(`Renamed ${r.renamed} wallet(s)`,"success"); }
+  catch(e){ toast(e.message,"error"); }
 }
 async function delSelWallets(){
   const ids=[...WSEL]; if(!ids.length)return;
@@ -414,20 +489,49 @@ async function doSendFunds(){
   }catch(e){ toast(e.message,"error"); }
   finally{ btn.disabled=false; btn.textContent="Send"; }
 }
-function openGenModal(){ $("genGroup").value=CUR_WGROUP||"main"; openModal("genModal"); }
-function openImpModal(){ $("impGroup").value=CUR_WGROUP||"main"; $("impKeys").value=""; openModal("impModal"); }
+function openGenModal(){ fillGroupSelect("genGroup","genGroupNew",CUR_WGROUP||"main"); openModal("genModal"); }
+function openImpModal(){ fillGroupSelect("impGroup","impGroupNew",CUR_WGROUP||"main"); $("impKeys").value=""; openModal("impModal"); }
 function rememberWGroup(g){ if(g){ WALLET_GROUPS.add(g); saveWGroups(); CUR_WGROUP=g; } }
-async function genWallets(){ const group=$("genGroup").value.trim()||"main"; try{ const r=await api("/wallets/generate",{method:"POST",body:JSON.stringify({count:Number($("genCount").value),group})}); rememberWGroup(group); closeModal("genModal"); toast(`Created ${r.added} wallets`,"success"); loadWallets(); }catch(e){toast(e.message,"error");} }
-async function importWallets(){ const keys=$("impKeys").value.split(/[\s,]+/).filter(Boolean); if(!keys.length)return toast("Paste at least one private key","info"); const group=$("impGroup").value.trim()||"main"; try{ const r=await api("/wallets/import",{method:"POST",body:JSON.stringify({privKeys:keys,group})}); rememberWGroup(group); closeModal("impModal"); toast(`Imported ${r.added} wallets`,"success"); $("impKeys").value=""; loadWallets(); }catch(e){toast(e.message,"error");} }
-async function delWallet(id){ if(await confirmDialog("Delete this wallet?","Delete")){ await api("/wallets/"+id,{method:"DELETE"}); loadWallets(); toast("Wallet deleted","info"); } }
-async function loadBalances(){
-  try{ const res=await api("/wallets/balances",{method:"POST",body:JSON.stringify({chainId:Number($("balChain").value),group:CUR_WGROUP})});
-    const map={}; res.forEach(r=>map[r.address.toLowerCase()]=r.err?"err":fmtEth(r.balanceWei));
-    document.querySelectorAll("#walletRows tr").forEach(tr=>{ tr.querySelector(".bal").textContent=map[tr.dataset.addr.toLowerCase()]??"—"; });
+async function genWallets(){ const group=groupValue("genGroup","genGroupNew"); if(!group)return toast("Enter a name for the new group","info"); try{ const r=await api("/wallets/generate",{method:"POST",body:JSON.stringify({count:Number($("genCount").value),group})}); rememberWGroup(group); closeModal("genModal"); toast(`Created ${r.added} wallets`,"success"); loadWallets(); }catch(e){toast(e.message,"error");} }
+async function importWallets(){
+  const keys=$("impKeys").value.split(/[\s,]+/).filter(Boolean); if(!keys.length)return toast("Paste at least one private key","info");
+  const group=groupValue("impGroup","impGroupNew"); if(!group)return toast("Enter a name for the new group","info");
+  try{
+    const r=await api("/wallets/import",{method:"POST",body:JSON.stringify({privKeys:keys,group})});
+    rememberWGroup(group); closeModal("impModal"); $("impKeys").value=""; loadWallets();
+    // A wallet can only exist once (unique address); re-importing existing keys adds 0.
+    const dupes=keys.length-(r.added||0);
+    if(r.added) toast(`Imported ${r.added} wallet(s)`+(dupes>0?` · ${dupes} already existed`:""),"success");
+    else toast(`No new wallets — all ${keys.length} already imported (a wallet can't be in two groups)`,"info");
   }catch(e){toast(e.message,"error");}
 }
+async function delWallet(id){ if(await confirmDialog("Delete this wallet?","Delete")){ await api("/wallets/"+id,{method:"DELETE"}); loadWallets(); toast("Wallet deleted","info"); } }
+async function loadBalances(){
+  // Check only the selected wallets; if none are selected, check everything shown
+  // in the current group. Avoids re-fetching all 500 wallets just to see a few.
+  const targets = WSEL.size ? selWallets() : shownWallets();
+  if(!targets.length) return toast("Select wallets to check, or pick a group","info");
+  const want = new Set(targets.map(w=>w.address.toLowerCase()));
+  const setBal=(a,v)=>{ const tr=document.querySelector(`#walletRows tr[data-addr="${a}"]`); const c=tr&&tr.querySelector(".bal"); if(c) c.textContent=v; };
+  // Mark the rows being checked with "…" so it's easy to see what's in flight.
+  targets.forEach(w=>setBal(w.address,"…"));
+  try{
+    const res=await api("/wallets/balances",{method:"POST",body:JSON.stringify({
+      chainId:Number($("balChain").value), addresses:targets.map(w=>w.address) })});
+    const map={}; res.forEach(r=>map[r.address.toLowerCase()]=r.err?"err":fmtEth(r.balanceWei));
+    document.querySelectorAll("#walletRows tr").forEach(tr=>{
+      const a=(tr.dataset.addr||"").toLowerCase(); if(a && want.has(a)) tr.querySelector(".bal").textContent=map[a]??"err"; });
+  }catch(e){
+    // Clear the in-flight "…" back to "—" so rows don't hang on failure. Guard
+    // dataset.addr — the "No wallets in this group" placeholder row has none, and an
+    // unguarded .toLowerCase() here would throw and swallow the real error toast.
+    document.querySelectorAll("#walletRows tr").forEach(tr=>{
+      const a=(tr.dataset.addr||"").toLowerCase(); const c=tr.querySelector(".bal"); if(a && want.has(a) && c && c.textContent==="…") c.textContent="—"; });
+    toast(e.message,"error");
+  }
+}
 // ---------- manage funds (disperse / consolidate) ----------
-let FUND_MODE="disperse", fundToSel=null, fundFromSel=null, FUND_RUN=null;
+let FUND_MODE="disperse", fundToSel=null, fundFromSel=null, fundFromPick=null, fundToPick=null, FUND_RUN=null;
 function pickFundMode(m){
   FUND_MODE=m;
   $("mDisperse").classList.toggle("active",m==="disperse");
@@ -441,10 +545,16 @@ async function openFundsModal(){
   try{ WALLETS = await api("/wallets"); }catch{}
   const disabled=new Set((APP_CFG.chainsDisabled)||[]);
   $("fChain").innerHTML = (CHAINS||[]).filter(c=>!disabled.has(c.id)).map(c=>`<option value="${c.id}">${c.name} (${c.id})</option>`).join("");
-  $("fFrom").innerHTML = `<option value="">— pick funder —</option>` + (WALLETS||[]).map(w=>`<option value="${w.id}">${escHtml(w.label)}-${w.id} · ${short(w.address)}</option>`).join("");
   if(!fundToSel) fundToSel = makeWalletSelect("fToSel");
   if(!fundFromSel) fundFromSel = makeWalletSelect("fFromSel");
-  await fundToSel.reload(); await fundFromSel.reload();
+  if(!fundFromPick) fundFromPick = makeWalletPicker("fFromPick");                 // disperse funder (searchable)
+  if(!fundToPick)   fundToPick   = makeWalletPicker("fToPick", w=>{ if(w) $("fToAddr").value=w.address; }); // consolidate dest → fills the address box
+  // reload() preserves prior selections; clear() so a reopened modal never carries a
+  // stale set of recipients/sources into the next disperse/consolidate.
+  await fundToSel.reload(); fundToSel.clear();
+  await fundFromSel.reload(); fundFromSel.clear();
+  fundFromPick && (fundFromPick.setWallets(WALLETS), fundFromPick.clear());
+  fundToPick && (fundToPick.setWallets(WALLETS), fundToPick.clear());
   ["fToken","fAmount","fToAddr","fConsAmount"].forEach(id=>$(id)&&($(id).value=""));
   $("fMax").checked=true; toggleConsAmount();
   FUND_RUN=null; $("fundsBtn").disabled=false;
@@ -461,7 +571,7 @@ async function doFunds(){
   const unit=token?"tokens":"ETH";
   let req;
   if(FUND_MODE==="disperse"){
-    const fromWalletId=Number($("fFrom").value)||0;
+    const fromWalletId=fundFromPick ? fundFromPick.selectedId() : 0;
     // Explicit selection only — never disperse to "all wallets" by accident.
     let toWalletIds = (fundToSel ? fundToSel.selected() : []).filter(id=>id!==fromWalletId);
     const amountEth=($("fAmount").value||"").trim();
@@ -810,7 +920,7 @@ async function stopGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CU
 async function boostGroup(){ Object.values(TASKS).filter(t=>t.group===CUR_GROUP).forEach(t=>api(`/tasks/${t.id}/boost`,{method:"POST"}).catch(()=>{})); }
 
 // create / edit task modal
-let TASK_MODE="simulate", EDIT_ID=null, EDIT_CFG=null, EDIT_WALLET=null, SEADROP_ON=false, _linkTimer=null, PHASES=[];
+let TASK_MODE="simulate", EDIT_ID=null, EDIT_CFG=null, EDIT_WALLET=null, SEADROP_ON=false, _linkTimer=null, PHASES=[], SEADROP_MAX=1;
 function toggleHex(){ const h=$("tHex").checked; $("hexFld").classList.toggle("hide",!h); }
 // ---- ABI helper: paste or fetch a contract ABI, pick a function from a dropdown ----
 let ABI_FNS=[];
@@ -867,6 +977,10 @@ function onPhaseChange(){
   if($("tMintPrice")) $("tMintPrice").value=(+p.priceEth||0);
   if($("tStartAt")){ $("tStartAt").value=p.startUnix||""; updateStartHint(); }       // phase start -> general Start Time
   const ph=$("tPhaseStart"); if(ph) ph.textContent = p.startUnix ? ("opens "+fmtLocal(p.startUnix)+" · "+relTime(p.startUnix)) : "";
+  // Per-wallet cap can differ per phase (allowlist vs public); reflect the selected one.
+  const pmax=(p && +p.maxPerWallet>0) ? +p.maxPerWallet : (SEADROP_MAX||1);
+  const lbl=$("tQtyMaxLbl"); if(lbl) lbl.textContent=`NFT Amount (max ${pmax})`;
+  const q=$("tQty"); if(q){ q.setAttribute("max",pmax); if((+q.value||1)>pmax) q.value=pmax; }
 }
 // Paste into the contract field -> auto-detect what it is:
 //   - a tx hash / explorer /tx/ link  -> replay that transaction (contract+fn+params+value)
@@ -916,6 +1030,35 @@ async function resolveTxReplay(){
     }
   }catch(e){ toast(e.message,"error"); }
 }
+// Render the SeaDrop mint block (phase dropdown + qty + price) from already-known data.
+// Shared by resolveTaskLink (live OpenSea data) and openTaskEdit (saved config), so
+// editing a task never has to wait on the slow /nft/resolve-link round-trip.
+function renderSeadropBlock(name, maxPerWallet, phases){
+  SEADROP_ON=true;
+  const fn=$("fnRow"), pr=$("paramsRow"), hint=$("taskNftHint");
+  if(fn) fn.style.display="none";
+  if(pr) pr.style.display="none";
+  if($("abiBlock")) $("abiBlock").classList.add("hide");
+  SEADROP_MAX=maxPerWallet||1;
+  PHASES = (Array.isArray(phases) && phases.length) ? phases
+    : [{index:0,kind:"public",priceEth:"0",priceWei:"0",startUnix:0,endUnix:0,maxPerWallet:SEADROP_MAX}];
+  const opts = PHASES.map((p,i)=>{
+    const nm=(p.kind==="public"?"Public Mint":"Allowlist");
+    const when=p.startUnix?` · ${fmtLocal(p.startUnix)}`:"";
+    return `<option value="${i}">${nm} · ${(+p.priceEth||0)} ETH${when}</option>`;
+  }).join("");
+  if(!hint) return;
+  hint.style.display="block";
+  hint.innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${escHtml(name||"collection")}</b></div>
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:end">
+      <label class="fld">Mint Phase<select id="tMintPhase" onchange="onPhaseChange()">${opts}</select></label>
+      <label class="fld"><span id="tQtyMaxLbl">NFT Amount (max ${SEADROP_MAX})</span><input id="tQty" value="1" /></label>
+      <label class="fld">Price / NFT (ETH)<input id="tMintPrice" value="" /></label>
+    </div>
+    <div class="muted" id="tPhaseStart" style="margin-top:9px;text-transform:none"></div>`;
+  onPhaseChange();   // fill price + Start Time from the first phase
+}
 async function resolveTaskLink(){
   const v=$("tContract").value.trim(); if(!v) return;
   try{
@@ -925,29 +1068,10 @@ async function resolveTaskLink(){
     if(r.chainId) $("tChain").value=r.chainId;
     const hint=$("taskNftHint"), fn=$("fnRow"), pr=$("paramsRow");
     if(r.seadrop){
-      SEADROP_ON=true;
-      if(fn) fn.style.display="none";
-      if(pr) pr.style.display="none";
-      if($("abiBlock")) $("abiBlock").classList.add("hide");
-      const max=r.maxPerWallet||1;
       // Use the GraphQL phases (public + allowlist) if present, else a single public phase.
-      PHASES = (Array.isArray(r.phases) && r.phases.length) ? r.phases
-        : [{index:0,kind:"public",priceEth:weiToEthStr(r.priceWei),priceWei:r.priceWei||"0",startUnix:0,endUnix:0}];
-      const opts = PHASES.map((p,i)=>{
-        const name=(p.kind==="public"?"Public Mint":"Allowlist");
-        const when=p.startUnix?` · ${fmtLocal(p.startUnix)}`:"";
-        return `<option value="${i}">${name} · ${(+p.priceEth||0)} ETH${when}</option>`;
-      }).join("");
-      hint.style.display="block";
-      hint.innerHTML=`
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${escHtml(r.name||"collection")}</b></div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:end">
-          <label class="fld">Mint Phase<select id="tMintPhase" onchange="onPhaseChange()">${opts}</select></label>
-          <label class="fld">NFT Amount (max ${max})<input id="tQty" value="1" /></label>
-          <label class="fld">Price / NFT (ETH)<input id="tMintPrice" value="" /></label>
-        </div>
-        <div class="muted" id="tPhaseStart" style="margin-top:9px;text-transform:none"></div>`;
-      onPhaseChange();   // fill price + Start Time from the first phase
+      const phases = (Array.isArray(r.phases) && r.phases.length) ? r.phases
+        : [{index:0,kind:"public",priceEth:weiToEthStr(r.priceWei),priceWei:r.priceWei||"0",startUnix:0,endUnix:0,maxPerWallet:r.maxPerWallet||1}];
+      renderSeadropBlock(r.name, r.maxPerWallet, phases);
       // Keep the current mode (Simulate by default) — don't force Action on link paste.
     } else {
       SEADROP_ON=false; PHASES=[]; if(fn) fn.style.display=""; if(pr) pr.style.display="";
@@ -957,7 +1081,13 @@ async function resolveTaskLink(){
     toast(r.seadrop ? `SeaDrop: ${r.name||"collection"}` : `Resolved ${r.name||"contract"} — not a SeaDrop, enter the mint Function (or use Hex)`, r.seadrop?"success":"info");
   }catch(e){ toast(e.message,"error"); }
 }
-function pickMode(m){ TASK_MODE=m; ["Simulate","Spam","Action"].forEach(x=>$("tg"+x).classList.toggle("on",x.toLowerCase()===m)); const pr=$("postActionRow"); if(pr) pr.style.display = m==="action" ? "grid" : "none"; }
+function pickMode(m){
+  if(m==="action") m="instant"; // legacy tasks stored before the Action→Instant rename
+  TASK_MODE=m;
+  ["Simulate","Instant","Spam"].forEach(x=>{ const el=$("tg"+x); if(el) el.classList.toggle("on",x.toLowerCase()===m); });
+  const rf=$("tRetryFld"); if(rf) rf.style.display = m==="simulate" ? "inline-flex" : "none";
+  const pr=$("postActionRow"); if(pr) pr.style.display = m==="instant" ? "grid" : "none";
+}
 function onPostActionChange(){ const t=($("tPostAction")||{}).value; const df=$("postDestFld"); if(df) df.style.visibility=(t==="transfer"||t==="drain")?"visible":"hidden"; }
 function gasParams(){ const mode=$("tGasMode").value; const g={mode};
   if(mode==="manual"){ if($("tMaxFee").value)g.maxFeeGwei=Number($("tMaxFee").value); if($("tPrio").value)g.priorityFeeGwei=Number($("tPrio").value); }
@@ -993,12 +1123,23 @@ async function openTaskEdit(id, walletId){
   if(cfg.postAction){ if($("tPostAction"))$("tPostAction").value=cfg.postAction.type||"none"; if($("tPostDest"))$("tPostDest").value=cfg.postAction.destination||""; if($("tPostDrain"))$("tPostDrain").checked=!!cfg.postAction.drainEth; onPostActionChange(); }
   const g=cfg.gas||{}; $("tGasMode").value=g.mode||"auto"; if(g.maxFeeGwei!=null)$("tMaxFee").value=g.maxFeeGwei; if(g.priorityFeeGwei!=null)$("tPrio").value=g.priorityFeeGwei; if(g.gasLimit!=null)$("tGasLimit").value=g.gasLimit;
   pickMode(cfg.mode||"simulate");
+  if($("tRetrySim")) $("tRetrySim").checked=!!cfg.retryUntilSuccess;
   if(cfg.startAt && $("tStartAt")) $("tStartAt").value=cfg.startAt; updateStartHint();
   await taskWS.reload(); taskWS.setSelected(EDIT_WALLET?[EDIT_WALLET]:(cfg.walletIds||[]));
   if(taskRS){ await taskRS.reload(); taskRS.setSelected(cfg.rpcUrls||[]); }
   try{ PROXIES = await api("/proxies"); }catch{} fillProxyGroups(); if($("tProxyGroup")) $("tProxyGroup").value=cfg.proxyGroup||"";
   if(cfg.seadrop){
-    await resolveTaskLink();   // rebuild the SeaDrop mint block from the contract
+    // Build the SeaDrop block from the SAVED config — instantly, with NO OpenSea
+    // round-trip. Editing used to `await resolveTaskLink()` here, hanging the modal
+    // ~5s (21s on a chain OpenSea doesn't index) before it would open. The saved
+    // values are authoritative for editing; re-paste the contract to refresh phases.
+    const savedMax = Math.max(cfg.quantity||1, SEADROP_MAX||1);
+    renderSeadropBlock("collection", savedMax, [{
+      index:0, kind:"public",
+      priceEth: cfg.mintPriceWei ? weiToEthStr(cfg.mintPriceWei) : "0",
+      priceWei: cfg.mintPriceWei||"0",
+      startUnix: cfg.startAt||0, endUnix:0, maxPerWallet: savedMax,
+    }]);
     if($("tQty")) $("tQty").value=cfg.quantity||1;
     if($("tMintPrice")&&cfg.mintPriceWei) $("tMintPrice").value=weiToEthStr(cfg.mintPriceWei);
     if($("tStartAt")&&cfg.startAt){ $("tStartAt").value=cfg.startAt; updateStartHint(); }   // keep saved time over phase default
@@ -1016,7 +1157,8 @@ function buildTaskConfig(){
     multiRpc:$("tMulti").value==="true", delayMs:Number($("tDelay").value)||0,
     flashbots:$("tFlashbots").checked, gas:gasParams() };
   // Always emit these keys (null/0 when cleared) so editing overrides the merge in createTask.
-  if(TASK_MODE==="action" && $("tPostAction") && $("tPostAction").value!=="none"){
+  cfg.retryUntilSuccess = TASK_MODE==="simulate" && !!($("tRetrySim")||{}).checked;
+  if(TASK_MODE==="instant" && $("tPostAction") && $("tPostAction").value!=="none"){
     const pa={ type:$("tPostAction").value, drainEth:$("tPostDrain").checked };
     const dest=($("tPostDest").value||"").trim(); if(dest) pa.destination=dest;
     cfg.postAction=pa;
@@ -1337,7 +1479,7 @@ async function nftResolve(){
       </div>
       <div class="row" style="margin-top:14px;align-items:flex-end">
         <label class="fld" style="width:100px">Quantity<input id="nftQty" value="1" /></label>
-        <label class="fld" style="width:130px">Mode<select id="nftMode"><option value="simulate">Simulate</option><option value="action">Action</option></select></label>
+        <label class="fld" style="width:130px">Mode<select id="nftMode"><option value="simulate">Simulate</option><option value="instant">Instant</option></select></label>
         <button class="primary sm" onclick="nftCreateMint()">Create Mint Task</button>
         <span class="muted">uses the wallets selected above</span>
       </div>`;
@@ -1356,7 +1498,8 @@ async function nftScan(){
 async function nftCreateMint(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   const ids = nftWS ? nftWS.selected() : [];
-  const cfg={ group:"NFT", chainId, contractAddress:contract, mode:$("nftMode").value, seadrop:true, quantity:Number($("nftQty").value)||1, gas:{mode:"auto"} };
+  const cfg={ group:"NFT", chainId, contractAddress:contract, mode:$("nftMode").value, seadrop:true, quantity:Number($("nftQty").value)||1, gas:{mode:"auto"},
+    proxyGroup:($("nftProxy")||{}).value||"" }; // route the per-wallet OpenSea voucher polls through the tab's proxy group
   if(ids.length) cfg.walletIds=ids;
   try{ await api("/tasks",{method:"POST",body:JSON.stringify(cfg)}); toast("Mint task created in group 'NFT'","success"); }
   catch(e){ toast(e.message,"error"); }
@@ -1519,6 +1662,19 @@ function fmtLogFields(f){
   const parts=Object.entries(f).map(([k,v])=>`${k}=${(v&&typeof v==="object")?JSON.stringify(v):v}`);
   return parts.length?" · "+parts.join(" "):"";
 }
+// WS bursts (spam mode fires continuously) used to call renderTasks()/appendLog() once
+// per frame received, saturating the event loop until the UI — including the Stop
+// button — froze. Both are now coalesced into at most one DOM pass per animation frame.
+let RENDER_PENDING=false;
+function scheduleRender(){ if(RENDER_PENDING) return; RENDER_PENDING=true;
+  requestAnimationFrame(()=>{ RENDER_PENDING=false; renderTasks(); }); }
+let LOG_QUEUE=[], LOG_PENDING=false;
+function queueLog(e){
+  LOG_QUEUE.push(e);
+  if(LOG_QUEUE.length>500) LOG_QUEUE.splice(0, LOG_QUEUE.length-500); // drop the oldest, never the newest
+  if(LOG_PENDING) return; LOG_PENDING=true;
+  requestAnimationFrame(()=>{ LOG_PENDING=false; const batch=LOG_QUEUE; LOG_QUEUE=[]; batch.forEach(appendLog); });
+}
 function appendLog(e){ if(!logMatches(e))return;
   const div=document.createElement("div"); div.className="logline";
   div.style.color=(e.level==="ERROR"||e.level==="WARN")?"var(--danger)":"var(--muted)";
@@ -1540,8 +1696,8 @@ function connectWS(){
   ws.onopen=()=>{ $("wsState").textContent="live"; $("wsState").style.color="var(--accent)"; setOffline(false); if(!CHAINS.length) bootData().catch(()=>{}); };
   ws.onclose=()=>{ $("wsState").textContent="offline"; $("wsState").style.color="var(--danger)"; setTimeout(connectWS,2000); };
   ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;}
-    if(m.type==="task"){ TASKS[m.data.id]=m.data; renderTasks(); homeMaybeRefresh(); }
-    else if(m.type==="log"){ appendLog(m.data); }
+    if(m.type==="task"){ TASKS[m.data.id]=m.data; scheduleRender(); homeMaybeRefresh(); }
+    else if(m.type==="log"){ queueLog(m.data); }
     else if(m.type==="accept"){ nftOnAccept(m.data); homeMaybeRefresh(); }
     else if(m.type==="home"){ homeMaybeRefresh(); }
     else if(m.type==="whitelist"){ wlOnResult(m.data); }

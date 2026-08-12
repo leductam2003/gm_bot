@@ -93,8 +93,10 @@ func (s *Server) handleSendFunds(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "gas: "+err.Error())
 		return
 	}
-	const gasLimit = uint64(21000) // exact for a plain native transfer (no calldata)
 	to := common.HexToAddress(body.To)
+	// Size the native transfer from the node — 21000 on standard chains, but some
+	// custom chains need more and reject a hardcoded 21000 with "intrinsic gas too low".
+	gasLimit := evm.NativeGasLimit(ctx, client, from, to, big.NewInt(0))
 
 	bal, err := client.BalanceAt(ctx, from, nil)
 	if err != nil {

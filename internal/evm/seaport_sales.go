@@ -111,11 +111,20 @@ type OnchainSale struct {
 // OrderFulfilledTopic is the log topic0 for Seaport's OrderFulfilled event.
 func OrderFulfilledTopic() common.Hash { return orderFulfilledABI.Events["OrderFulfilled"].ID }
 
-// ScanSeaportSales reads Seaport 1.6 OrderFulfilled logs in [fromBlock, toBlock] where the
-// offerer (seller) is one of `sellers`, returning each as a confirmed NFT sale with the net
-// proceeds paid to that seller. The offerer filter is an indexed topic, so the node only
-// returns our wallets' sales. A listing that sold off-app surfaces here; an offer WE
-// accepted does not (there the buyer is the offerer) and is booked separately.
+// seaportVersions are the Seaport deployments OpenSea has used. OrderFulfilled is identical
+// across them, so we scan all in one query — an OLD collection's sales were filled on
+// Seaport 1.5 / 1.4 months ago, not 1.6, and scanning only 1.6 silently misses them.
+var seaportVersions = []common.Address{
+	common.HexToAddress(Seaport16),                                  // 1.6 (current)
+	common.HexToAddress("0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC"), // 1.5
+	common.HexToAddress("0x00000000000001ad428e4906aE43D8F9852d0dD6"), // 1.4
+}
+
+// ScanSeaportSales reads Seaport OrderFulfilled logs (across versions 1.4–1.6) in
+// [fromBlock, toBlock] where the offerer (seller) is one of `sellers`, returning each as a
+// confirmed NFT sale with the net proceeds paid to that seller. The offerer filter is an
+// indexed topic, so the node only returns our wallets' sales. A listing that sold off-app
+// surfaces here; an offer WE accepted does not (there the buyer is the offerer).
 func ScanSeaportSales(ctx context.Context, c *ethclient.Client, sellers []common.Address, fromBlock, toBlock *big.Int) ([]OnchainSale, error) {
 	if len(sellers) == 0 {
 		return nil, nil
@@ -126,7 +135,7 @@ func ScanSeaportSales(ctx context.Context, c *ethclient.Client, sellers []common
 	}
 	q := ethereum.FilterQuery{
 		FromBlock: fromBlock, ToBlock: toBlock,
-		Addresses: []common.Address{common.HexToAddress(Seaport16)},
+		Addresses: seaportVersions,
 		Topics:    [][]common.Hash{{OrderFulfilledTopic()}, sellerTopics},
 	}
 	logs, err := c.FilterLogs(ctx, q)

@@ -191,8 +191,10 @@ func (s *Server) disperse(ctx context.Context, run fundsRun) {
 	amount, _ := parseUnits(b.AmountEth, run.decimals) // validated in the handler
 	n := int64(run.total)
 
-	// Gas: native is exact (21000); ERC-20 is estimated per-recipient in the loop below.
-	// repGas is a conservative ceiling used only for the upfront funder reserve.
+	// Gas per leg: native transfers are a fixed intrinsic cost (21000 on most chains,
+	// higher on some custom chains — estimate so we don't underprice and get rejected
+	// with "intrinsic gas too low"). ERC-20 is estimated per-recipient in the loop below.
+	// repGas doubles as the per-native-leg gas and the upfront funder reserve.
 	repGas := uint64(21000)
 	if run.isToken {
 		repGas = 100000 // safe reserve even if the sample estimate fails
@@ -205,6 +207,9 @@ func (s *Server) disperse(ctx context.Context, run fundsRun) {
 				}
 			}
 		}
+	} else if wl, e := s.st.GetWallet(b.ToWalletIDs[0]); e == nil {
+		// One estimate for the whole batch — every recipient is a same-cost EOA transfer.
+		repGas = evm.NativeGasLimit(ctx, client, from, common.HexToAddress(wl.Address), amount)
 	}
 	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(repGas), run.fees.MaxFeePerGas)
 
@@ -259,7 +264,7 @@ func (s *Server) disperse(ctx context.Context, run fundsRun) {
 		recipient := common.HexToAddress(wl.Address)
 		txTo, value := recipient, amount
 		var data []byte
-		legGas := uint64(21000)
+		legGas := repGas // native: the batch-sized estimate; ERC-20 overwrites below
 		if run.isToken {
 			d, de := evm.ERC20TransferData(recipient, amount)
 			if de != nil {
@@ -363,7 +368,9 @@ func (s *Server) consolidate(ctx context.Context, run fundsRun) {
 					pub(fundResult{Index: i, From: from.Hex(), Error: "balance: " + e.Error()})
 					return
 				}
-				gasLimit = 21000
+				// Native sweep: size the leg from the node (some custom chains need
+				// more than the 21000 intrinsic floor, else "intrinsic gas too low").
+				gasLimit = evm.NativeGasLimit(ctx, client, from, dest, big.NewInt(0))
 				gasCost := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), run.fees.MaxFeePerGas)
 				var amount *big.Int
 				if b.Max {

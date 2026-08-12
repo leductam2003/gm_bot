@@ -5,12 +5,37 @@ package rpc
 import (
 	"context"
 	"math/big"
+	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	gethrpc "github.com/ethereum/go-ethereum/rpc"
 )
+
+// sharedTransport is tuned for hundreds of concurrent in-flight RPC calls (mass
+// mints fan out one goroutine per wallet). go-ethereum's default HTTP client uses
+// http.DefaultTransport, which keeps only 2 idle connections per host — a burst of
+// N calls pays a fresh TCP+TLS handshake almost every time — and, over HTTP/2,
+// multiplexes everything onto ONE connection whose concurrency the server caps
+// (often a few dozen streams), which serializes large batches. A big HTTP/1.1
+// keep-alive pool gives predictable parallelism instead.
+var sharedTransport = &http.Transport{
+	Proxy:               http.ProxyFromEnvironment,
+	DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	// Sized for ~1000 tasks broadcasting to the same one or two RPC hosts at the
+	// same start second: every connection warmed during pre-arm must survive in the
+	// idle pool until T0, or the fire pays a fresh TCP+TLS handshake mid-race.
+	MaxIdleConns:        8192,
+	MaxIdleConnsPerHost: 4096,
+	IdleConnTimeout:     90 * time.Second,
+	TLSHandshakeTimeout: 10 * time.Second,
+	// ForceAttemptHTTP2 left false: a custom transport without it speaks HTTP/1.1,
+	// which is exactly what we want here (many parallel reused connections).
+}
 
 // Pool caches one ethclient per URL so repeated balance/latency calls reuse the
 // underlying HTTP connection.
@@ -32,9 +57,26 @@ func (p *Pool) get(ctx context.Context, url string) (*ethclient.Client, error) {
 	if c, ok := p.clients[url]; ok {
 		return c, nil
 	}
-	c, err := ethclient.DialContext(ctx, url)
-	if err != nil {
-		return nil, err
+	var c *ethclient.Client
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		// No http.Client.Timeout on purpose: it would cap EVERY call at one blanket
+		// value, silently killing legitimately slow requests (a 200k-block getLogs
+		// sales scan runs minutes under its own 15-minute context). Connect and TLS
+		// are bounded by the transport; total call time is the caller's context.
+		rc, err := gethrpc.DialOptions(ctx, url, gethrpc.WithHTTPClient(&http.Client{
+			Transport: sharedTransport,
+		}))
+		if err != nil {
+			return nil, err
+		}
+		c = ethclient.NewClient(rc)
+	} else {
+		// ws:// etc. — the custom HTTP client doesn't apply.
+		cc, err := ethclient.DialContext(ctx, url)
+		if err != nil {
+			return nil, err
+		}
+		c = cc
 	}
 	p.clients[url] = c
 	return c, nil

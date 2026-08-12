@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"zyperbot/internal/chains"
 	"zyperbot/internal/store"
@@ -117,12 +118,15 @@ func (s *Server) handleGas(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"gwei": strconv.FormatFloat(g, 'f', 2, 64)})
 }
 
-// POST /api/wallets/balances {chainId, rpcUrl?, group?} — live native balances.
+// POST /api/wallets/balances {chainId, rpcUrl?, group?, addresses?} — live native
+// balances. If `addresses` is given, only those wallets are checked (used by the
+// UI to refresh just the selected rows); otherwise every wallet in the group is.
 func (s *Server) handleBalances(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ChainID int    `json:"chainId"`
-		RPCUrl  string `json:"rpcUrl"`
-		Group   string `json:"group"`
+		ChainID   int      `json:"chainId"`
+		RPCUrl    string   `json:"rpcUrl"`
+		Group     string   `json:"group"`
+		Addresses []string `json:"addresses"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
@@ -147,12 +151,26 @@ func (s *Server) handleBalances(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// When the client sends an explicit address list, check exactly those wallets
+	// (restricted to addresses we actually manage). Otherwise fall back to every
+	// wallet in the requested group.
+	var want map[string]bool
+	if len(body.Addresses) > 0 {
+		want = make(map[string]bool, len(body.Addresses))
+		for _, a := range body.Addresses {
+			want[strings.ToLower(a)] = true
+		}
+	}
 	var addrs []string
 	for _, wlt := range ws {
 		if wlt.Network != "evm" {
 			continue
 		}
-		if body.Group != "" && wlt.GroupName != body.Group {
+		if want != nil {
+			if !want[strings.ToLower(wlt.Address)] {
+				continue
+			}
+		} else if body.Group != "" && wlt.GroupName != body.Group {
 			continue
 		}
 		addrs = append(addrs, wlt.Address)

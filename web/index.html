@@ -132,7 +132,7 @@
               <button class="sm" onclick="openFundsModal()">Manage Funds</button>
               <button class="sm" onclick="openImpModal()">Import</button>
               <button class="primary sm" onclick="openGenModal()">Generate</button>
-              <button class="icon" title="Balances" onclick="loadBalances()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+              <button class="icon" title="Load balances (selected wallets, or all shown if none selected)" onclick="loadBalances()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
             </div>
           </div>
           <div class="tscroll">
@@ -144,6 +144,7 @@
           <div class="actbar" id="walActbar" style="display:none">
             <div class="left"><span id="walSelInfo"><b>0</b> selected</span> &middot; <span class="selclear" onclick="walSelectAll(false)">Clear</span></div>
             <div class="right">
+              <button class="sm" onclick="renameSelWallets()">Rename</button>
               <button class="sm" onclick="copySelAddrs()">Copy Addresses</button>
               <button class="sm" onclick="copySelKeys()">Copy Private Keys</button>
               <button class="sm danger" onclick="delSelWallets()">Delete</button>
@@ -460,7 +461,7 @@
         <label class="fld" style="grid-column:1/3"><span><input type="checkbox" id="meFnOn"> Function</span><input id="meFn" placeholder="mint(uint256,address)" /></label>
         <label class="fld" style="grid-column:3/4"><span><input type="checkbox" id="meValueOn"> Value (wei)</span><input id="meValue" placeholder="0" /></label>
         <label class="fld" style="grid-column:1/4"><span><input type="checkbox" id="meParamsOn"> Parameters</span><input id="meParams" placeholder="param1;param2 ({address}=wallet)" /></label>
-        <label class="fld"><span><input type="checkbox" id="meModeOn"> Mode</span><select id="meMode"><option value="simulate">simulate</option><option value="spam">spam</option><option value="action">action</option></select></label>
+        <label class="fld"><span><input type="checkbox" id="meModeOn"> Mode</span><select id="meMode"><option value="simulate">simulate</option><option value="instant">instant</option><option value="spam">spam</option></select></label>
         <label class="fld"><span><input type="checkbox" id="meStartOn"> Start Time (unix)</span><input id="meStart" placeholder="0 = now" /></label>
         <label class="fld"><span><input type="checkbox" id="meGroupOn"> Group</span><input id="meGroup" placeholder="Imported" /></label>
         <label class="fld"><span><input type="checkbox" id="meGasModeOn"> Gas mode</span><select id="meGasMode"><option value="auto">auto</option><option value="manual">manual</option></select></label>
@@ -544,8 +545,10 @@
       </div>
       <div class="toggles" style="margin-top:18px">
         <div class="tg on" id="tgSimulate" onclick="pickMode('simulate')" title="eth_call first, then send only if it would succeed (error if it would revert)"><div class="sw"></div> Simulate</div>
-        <div class="tg" id="tgSpam" onclick="pickMode('spam')" title="repeat the send continuously until stopped"><div class="sw"></div> Spam</div>
-        <div class="tg" id="tgAction" onclick="pickMode('action')" title="send straight away, no pre-check"><div class="sw"></div> Action</div>
+        <div class="tg" id="tgInstant" onclick="pickMode('instant')" title="send straight away, no pre-check"><div class="sw"></div> Instant</div>
+        <div class="tg" id="tgSpam" onclick="pickMode('spam')" title="fire-and-forget: send, bump nonce, send again — no simulate, no receipt wait — until you stop it"><div class="sw"></div> Spam</div>
+        <label id="tRetryFld" style="display:none;align-items:center;gap:7px;font-size:12px;color:var(--muted);text-transform:none;cursor:pointer" title="keep re-running the simulate until it passes, then send — sits on a closed mint and fires the moment it opens">
+          <input type="checkbox" id="tRetrySim" /> Retry until success</label>
       </div>
     </div>
     <div class="mfoot">
@@ -562,7 +565,10 @@
     <div class="mbody">
       <div class="grid">
         <label class="fld">Count<input id="genCount" type="number" value="5" min="1" max="1000" /></label>
-        <label class="fld">Group<input id="genGroup" value="main" /></label>
+        <label class="fld">Group
+          <select id="genGroup" onchange="onGroupSel('genGroup','genGroupNew')"></select>
+          <input id="genGroupNew" class="hide" placeholder="New group name…" />
+        </label>
       </div>
       <div class="muted" style="margin-top:10px;font-size:11px;text-transform:none">Creates brand-new random wallets. Private keys are encrypted at rest.</div>
     </div>
@@ -578,7 +584,10 @@
   <div class="modal" style="width:500px">
     <div class="mhead"><h3>Import Wallets</h3><span class="close" onclick="closeModal('impModal')">&times;</span></div>
     <div class="mbody">
-      <label class="fld">Group<input id="impGroup" value="main" /></label>
+      <label class="fld">Group
+        <select id="impGroup" onchange="onGroupSel('impGroup','impGroupNew')"></select>
+        <input id="impGroupNew" class="hide" placeholder="New group name…" />
+      </label>
       <label class="fld" style="margin-top:12px">Private keys (comma or newline separated)<textarea id="impKeys" rows="4" placeholder="0xabc…&#10;0xdef…"></textarea></label>
       <div class="muted" style="margin-top:10px;font-size:11px;text-transform:none">Existing keys you already control. Stored encrypted at rest.</div>
     </div>
@@ -603,13 +612,14 @@
         <label class="fld">Token (optional)<input id="fToken" placeholder="ERC-20 address — blank = native" /></label>
       </div>
       <div id="fDisperseFields">
-        <label class="fld" style="margin-top:12px">From — funder wallet<select id="fFrom"></select></label>
+        <label class="fld" style="margin-top:12px">From — funder wallet<div class="wsel" id="fFromPick"></div></label>
         <label class="fld" style="margin-top:12px">To — recipients<div class="wsel" id="fToSel"></div></label>
         <label class="fld" style="margin-top:12px">Amount per wallet<input id="fAmount" placeholder="0.00" /></label>
       </div>
       <div id="fConsolidateFields" style="display:none">
         <label class="fld" style="margin-top:12px">From — wallets to sweep<div class="wsel" id="fFromSel"></div></label>
-        <label class="fld" style="margin-top:12px">To — destination address<input id="fToAddr" placeholder="0x…" /></label>
+        <label class="fld" style="margin-top:12px">To — destination address<input id="fToAddr" placeholder="0x… (paste, or search a wallet below)" /></label>
+        <label class="fld" style="margin-top:8px"><span class="muted" style="text-transform:none;font-size:11px">or search one of your wallets</span><div class="wsel" id="fToPick"></div></label>
         <label class="fld" style="margin-top:12px"><span><input type="checkbox" id="fMax" checked onchange="toggleConsAmount()"> Sweep max (full balance − gas)</span></label>
         <label class="fld" id="fConsAmtRow" style="margin-top:6px;display:none">Amount per wallet<input id="fConsAmount" placeholder="0.00" /></label>
       </div>

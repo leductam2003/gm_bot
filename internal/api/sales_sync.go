@@ -22,11 +22,14 @@ import (
 var salesSyncing atomic.Bool
 
 const (
-	salesLookback  = 432000 // blocks to scan back on first run (~8 weeks on Ethereum)
-	salesChunk     = 9000   // max block span per eth_getLogs (well under the RPC range limit)
-	salesMaxChunks = 60     // cap work per pass (60*9000 covers the full first-run lookback)
-	sellerBatch    = 100    // wallets per getLogs topic filter
-	mintSearchSpan = 450000 // how far before a sale to look for its mint (under the ~500k RPC limit)
+	salesLookback = 1_300_000 // blocks to scan back on first run (~6 months on Ethereum)
+	salesChunk    = 200_000   // block span per eth_getLogs — the offerer filter keeps results
+	//                              tiny, so big ranges are accepted and the scan stays fast.
+	salesMaxChunks   = 12        // cap work per pass (12*200k = 2.4M > the first-run lookback)
+	sellerBatch      = 100       // wallets per getLogs topic filter
+	mintSearchWindow = 450000    // per getLogs span when locating a mint (under the ~500k RPC limit)
+	mintSearchFloor  = 2_600_000 // how far before a sale to search for its mint (~12 months) — old
+	//                              collections mint long before the resale, so this must be deep.
 )
 
 // RunSalesSync detects sales of minted NFTs straight from on-chain Seaport logs (no
@@ -195,14 +198,9 @@ func (s *Server) bookSale(ctx context.Context, chainID int, client *ethclient.Cl
 		if !ok {
 			return false
 		}
-		saleBlk := new(big.Int).SetUint64(sale.Block)
-		mintFrom := big.NewInt(0)
-		if sale.Block > mintSearchSpan {
-			mintFrom = new(big.Int).SetUint64(sale.Block - mintSearchSpan)
-		}
-		mint, minted := evm.FindMint(ctx, client, common.HexToAddress(sale.Contract), tokenID, mintFrom, saleBlk, common.HexToAddress(sale.Seller))
+		mint, minted := s.findMintDeep(ctx, client, common.HexToAddress(sale.Contract), tokenID, common.HexToAddress(sale.Seller), sale.Block)
 		if !minted {
-			return false // bought, not minted (or mint older than the window) — exclude
+			return false // bought, not minted (or mint older than the search floor) — exclude
 		}
 		mc, _ := evm.MintCost(ctx, client, mint.TxHash, common.HexToAddress(sale.Seller))
 		_, _ = s.st.AddMint(store.Mint{
@@ -216,6 +214,34 @@ func (s *Server) bookSale(ctx context.Context, chainID int, client *ethclient.Cl
 		TokenID: sale.TokenID, Address: sale.Seller, TxHash: sale.TxHash, ProceedsWei: sale.ProceedsWei, CostWei: cost,
 	})
 	return aerr == nil
+}
+
+// findMintDeep locates the seller's mint of a token by scanning backward from the sale in
+// windows the RPC accepts, down to mintSearchFloor blocks before the sale. Old collections
+// mint long before the resale, so a single short window would miss them (undercounting PnL).
+func (s *Server) findMintDeep(ctx context.Context, client *ethclient.Client, contract common.Address, tokenID *big.Int, seller common.Address, saleBlock uint64) (evm.MintInfo, bool) {
+	floor := uint64(0)
+	if saleBlock > mintSearchFloor {
+		floor = saleBlock - mintSearchFloor
+	}
+	hi := saleBlock
+	for hi > floor {
+		if ctx.Err() != nil {
+			break
+		}
+		lo := floor
+		if hi-floor > mintSearchWindow {
+			lo = hi - mintSearchWindow
+		}
+		if mi, ok := evm.FindMint(ctx, client, contract, tokenID, new(big.Int).SetUint64(lo), new(big.Int).SetUint64(hi), seller); ok {
+			return mi, true
+		}
+		if lo == floor {
+			break
+		}
+		hi = lo - 1
+	}
+	return evm.MintInfo{}, false
 }
 
 // blockTime returns a block's unix timestamp (for a backfilled mint's activity time),
@@ -317,7 +343,7 @@ func (s *Server) recordSaleOnConfirm(chainID int, contract common.Address, token
 // button). Detached so a slow scan doesn't block the request; results arrive over the WS.
 func (s *Server) handleHomeSync(w http.ResponseWriter, r *http.Request) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute) // deep first-run scan
 		defer cancel()
 		s.syncSalesOnce(ctx)
 	}()

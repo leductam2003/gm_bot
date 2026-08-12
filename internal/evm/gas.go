@@ -6,6 +6,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
@@ -80,6 +81,26 @@ func ResolveFees(ctx context.Context, c *ethclient.Client, gas GasParams) (Resol
 
 	maxFee := new(big.Int).Add(mulRat(baseFee, mult), tip)
 	return ResolvedFees{MaxFeePerGas: maxFee, MaxPriorityFeePerGas: tip}, nil
+}
+
+// NativeGasLimit sizes a plain native-value transfer. A standard EOA transfer costs
+// 21000 intrinsic gas, but some custom chains charge more and reject a hardcoded
+// 21000 with "intrinsic gas too low". Ask the node and pad by +25%, never dropping
+// below the 21000 floor. Unused gas is refunded on-chain. Falls back to 21000 when
+// estimation is unavailable, so behaviour on standard chains is unchanged.
+func NativeGasLimit(ctx context.Context, c *ethclient.Client, from, to common.Address, value *big.Int) uint64 {
+	if value == nil {
+		value = big.NewInt(0)
+	}
+	est, err := c.EstimateGas(ctx, ethereum.CallMsg{From: from, To: &to, Value: value})
+	if err != nil || est == 0 {
+		return 21000
+	}
+	padded := est + est/4
+	if padded < 21000 {
+		padded = 21000
+	}
+	return padded
 }
 
 // EstimateGasLimit estimates and pads (default +30%, floor 21000) — port of the
