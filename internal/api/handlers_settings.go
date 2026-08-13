@@ -92,20 +92,8 @@ const defaultUpdateRepo = "leductam2003/gm_bot"
 // the configured repo (app.config "updateRepo" = "owner/name"). Read-only: it never
 // downloads or runs anything — just reports whether a newer build exists.
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"current": config.Version, "configured": false}
-	repo := ""
-	if v, err := s.st.GetSetting("app.config"); err == nil && v != "" {
-		var m map[string]any
-		if json.Unmarshal([]byte(v), &m) == nil {
-			if rr, ok := m["updateRepo"].(string); ok {
-				repo = strings.TrimSpace(rr)
-			}
-		}
-	}
-	if repo == "" {
-		repo = defaultUpdateRepo // unset → check the canonical repo so auto-check works out of the box
-	}
-	out["configured"] = true
+	out := map[string]any{"current": config.Version, "configured": true}
+	repo := s.updateRepo() // configured source, or the canonical default (auto-check works out of the box)
 	body, status, err := githubGET(r.Context(), "https://api.github.com/repos/"+repo+"/releases/latest")
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

@@ -35,6 +35,7 @@ func main() {
 	// Resolve data paths relative to the EXECUTABLE so the app is portable and its
 	// data (db, logs, .env, web) persists across launches no matter the working dir.
 	base := exeDir()
+	api.CleanupStaleUpdate(base) // remove leftovers from a previous self-update (old exe/web, temp)
 
 	// Load local secrets (.env) and apply the operator's default ETH RPC.
 	config.LoadDotEnv(env("ZYPER_ENV", filepath.Join(base, ".env")))

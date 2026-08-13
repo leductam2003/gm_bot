@@ -211,9 +211,9 @@
             <div id="sub-app">
               <div class="card">
                 <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.0</span></div></div>
-                <p class="muted" style="margin-top:-4px">Check the configured GitHub release repo for a newer build. Auto-download/restart is added once a trusted release repo is set; data is kept (stored next to the exe).</p>
+                <p class="muted" style="margin-top:-4px">Auto-checks on open and every 5 minutes. When a newer build is published, Install downloads and unpacks it next to the exe (your data — wallets, tasks, keys — is untouched), then asks you to restart.</p>
                 <label class="fld">Update source (GitHub owner/repo)<input id="setUpdRepo" placeholder="owner/zyper-bot" /></label>
-                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="checkUpdate()">Check for Update</button><button class="sm" onclick="saveUpdRepo()">Save Repo</button><span class="muted" id="updStatus"></span></div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="checkUpdate()">Check for Update</button><button class="sm" onclick="saveUpdRepo()">Save Repo</button><button class="primary sm" id="updInstallBtn" style="display:none" onclick="installUpdate()">Install &amp; Restart</button><span class="muted" id="updStatus"></span></div>
               </div>
               <div class="card">
                 <h2>API Keys</h2>

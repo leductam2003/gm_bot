@@ -17,6 +17,7 @@ vault.key
 /zyper-bot.exe
 *.exe
 *.exe~
+/dist/
 
 # Reference / reverse-engineering artifacts (not part of the app)
 *.dc.html

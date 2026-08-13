@@ -1689,14 +1689,43 @@ async function checkUpdate(silent){
     const r=await api("/update/check");
     if($("updVer")) $("updVer").textContent="v"+(r.current||"?");
     if(!r.configured){ if(st) st.textContent="set an update source first"; if(!silent) toast("Set a GitHub owner/repo, then Check","info"); return; }
+    const ib=$("updInstallBtn");
     if(r.hasUpdate){
       const safe=(r.url&&/^https:\/\//i.test(r.url))?escHtml(r.url):"#";
       if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${escHtml(r.latest)} available</span> · <a href="${safe}" target="_blank" rel="noopener">release</a>`;
+      if(ib && !_updStaged) ib.style.display="";   // offer one-click download+install
       if(!silent || _updNotified!==r.latest){ toast(`Update available: v${r.latest}`,"success"); _updNotified=r.latest; }
     }
-    else if(r.note){ if(st) st.textContent=r.note; if(!silent) toast(r.note,"info"); }
-    else { if(st) st.textContent="up to date ✓"; if(!silent) toast("You're on the latest version","info"); }
+    else if(r.note){ if(st) st.textContent=r.note; if(ib) ib.style.display="none"; if(!silent) toast(r.note,"info"); }
+    else { if(st) st.textContent="up to date ✓"; if(ib) ib.style.display="none"; if(!silent) toast("You're on the latest version","info"); }
   }catch(e){ if(st && !silent) st.textContent=""; if(!silent) toast(e.message,"error"); }
+}
+// Install = download + unpack the new build next to the exe, then prompt to restart. After
+// a successful stage the button becomes "Restart now" (re-clicking relaunches).
+let _updStaged=false;
+async function installUpdate(){
+  if(_updStaged) return restartApp();
+  const btn=$("updInstallBtn"), st=$("updStatus");
+  if(btn){ btn.disabled=true; btn.textContent="Downloading…"; }
+  if(st) st.textContent="downloading & unpacking the new build…";
+  try{
+    const r=await api("/update/apply",{method:"POST"});
+    if(!r.applied){ if(st) st.textContent=r.message||"already up to date"; if(btn){ btn.disabled=false; btn.textContent="Install & Restart"; } toast(r.message||"Already up to date","info"); return; }
+    _updStaged=true;
+    if(st) st.innerHTML=`<span style="color:var(--green)">v${escHtml(r.version)} installed ✓</span> — restart to apply`;
+    if(btn){ btn.disabled=false; btn.textContent="Restart now"; }
+    if(await confirmDialog(`v${r.version} installed. Restart now to run the new build?`,"Restart now")) restartApp();
+  }catch(e){
+    if(st) st.textContent="install failed";
+    if(btn){ btn.disabled=false; btn.textContent="Install & Restart"; }
+    toast(e.message,"error");
+  }
+}
+async function restartApp(){
+  toast("Restarting…","info");
+  try{ await api("/update/restart",{method:"POST"}); }catch{}
+  const st=$("updStatus");
+  setTimeout(()=>{ if(st) st.textContent="restarting — if the window doesn't reopen, launch zyper-bot again"; }, 900);
 }
 async function loadTelegram(){
   try{ const r=await api("/telegram"); const c=r.config||{};

@@ -70,6 +70,8 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/appsettings", s.handleSetAppSettings)
 		r.Post("/discord/test", s.handleDiscordTest)
 		r.Get("/update/check", s.handleUpdateCheck)
+		r.Post("/update/apply", s.handleUpdateApply)     // download + extract + stage the new build
+		r.Post("/update/restart", s.handleUpdateRestart) // relaunch into the staged build
 
 		r.Get("/wallets", s.handleListWallets)
 		r.Post("/wallets/generate", s.handleGenerateWallets)
