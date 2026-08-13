@@ -84,6 +84,10 @@ func (s *Server) handleSetAppSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// defaultUpdateRepo is checked when the user hasn't set their own update source, so the
+// on-open / background auto-check works out of the box.
+const defaultUpdateRepo = "leductam2003/gm_bot"
+
 // GET /api/update/check — compare the running version to the latest GitHub release of
 // the configured repo (app.config "updateRepo" = "owner/name"). Read-only: it never
 // downloads or runs anything — just reports whether a newer build exists.
@@ -99,8 +103,7 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if repo == "" {
-		writeJSON(w, http.StatusOK, out)
-		return
+		repo = defaultUpdateRepo // unset → check the canonical repo so auto-check works out of the box
 	}
 	out["configured"] = true
 	body, status, err := githubGET(r.Context(), "https://api.github.com/repos/"+repo+"/releases/latest")

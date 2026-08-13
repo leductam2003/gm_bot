@@ -101,7 +101,7 @@
               <button class="sm primary" onclick="bulkTask('start')">Start</button>
               <button class="sm" onclick="bulkTask('stop')">Stop</button>
               <button class="sm" onclick="bulkTask('boost')">Boost</button>
-              <button class="sm" onclick="editSelected()">Edit</button>
+              <button class="sm" onclick="editSelected()" title="Edit the selected task(s) in the full task form">Edit</button>
               <button class="sm danger" onclick="bulkDeleteTasks()">Delete</button>
               <span class="selclear" onclick="taskSelectAll(false)">Clear</span>
             </div>
@@ -452,35 +452,6 @@
 </div>
 
 <!-- ===== Mass Edit modal ===== -->
-<div class="overlay" id="massEditModal">
-  <div class="modal" style="width:560px">
-    <div class="mhead"><h3>Mass Edit <span class="muted" id="massCount"></span></h3><span class="close" onclick="closeModal('massEditModal')">&times;</span></div>
-    <div class="mbody">
-      <p class="muted" style="margin-top:-4px">Tick a field to apply it to every selected task; unticked fields are left unchanged. Tasks that are running will be skipped.</p>
-      <div class="grid">
-        <label class="fld" style="grid-column:1/3"><span><input type="checkbox" id="meContractOn"> Contract / Launchpad</span><input id="meContract" placeholder="0x…" /></label>
-        <label class="fld"><span><input type="checkbox" id="meChainOn"> Chain</span><select id="meChain"></select></label>
-        <label class="fld" style="grid-column:1/3"><span><input type="checkbox" id="meFnOn"> Function</span><input id="meFn" placeholder="mint(uint256,address)" /></label>
-        <label class="fld" style="grid-column:3/4"><span><input type="checkbox" id="meValueOn"> Value (wei)</span><input id="meValue" placeholder="0" /></label>
-        <label class="fld" style="grid-column:1/4"><span><input type="checkbox" id="meParamsOn"> Parameters</span><input id="meParams" placeholder="param1;param2 ({address}=wallet)" /></label>
-        <label class="fld"><span><input type="checkbox" id="meModeOn"> Mode</span><select id="meMode"><option value="simulate">simulate</option><option value="instant">instant</option><option value="spam">spam</option></select></label>
-        <label class="fld"><span><input type="checkbox" id="meStartOn"> Start Time (unix)</span><input id="meStart" placeholder="0 = now" /></label>
-        <label class="fld"><span><input type="checkbox" id="meGroupOn"> Group</span><input id="meGroup" placeholder="Imported" /></label>
-        <label class="fld"><span><input type="checkbox" id="meGasModeOn"> Gas mode</span><select id="meGasMode"><option value="auto">auto</option><option value="manual">manual</option></select></label>
-        <label class="fld"><span><input type="checkbox" id="meMaxFeeOn"> Max Fee (gwei)</span><input id="meMaxFee" /></label>
-        <label class="fld"><span><input type="checkbox" id="mePrioOn"> Priority (gwei)</span><input id="mePrio" /></label>
-        <label class="fld"><span><input type="checkbox" id="meDelayOn"> Delay (ms)</span><input id="meDelay" /></label>
-        <label class="fld"><span><input type="checkbox" id="meMultiOn"> Multi-RPC</span><select id="meMulti"><option value="false">no</option><option value="true">yes</option></select></label>
-        <label class="fld"><span><input type="checkbox" id="meFlashOn"> Flashbots</span><select id="meFlash"><option value="false">off</option><option value="true">on</option></select></label>
-      </div>
-    </div>
-    <div class="mfoot">
-      <button onclick="closeModal('massEditModal')">Cancel</button>
-      <button class="primary" id="massApplyBtn" onclick="applyMassEdit()">Apply</button>
-    </div>
-  </div>
-</div>
-
 <!-- toasts -->
 <div class="toasts" id="toasts"></div>
 

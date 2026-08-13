@@ -136,7 +136,8 @@ nav a.active::after { content: ""; margin-left: auto; width: 5px; height: 5px; b
 .gcard .gdel:hover { color: var(--danger); background: #f0484814; }
 .gcard .gdel svg.i { width: 13px; height: 13px; }
 .gcard .gcounts { display: flex; gap: 16px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.gcard .gcounts .ok { color: var(--green); }
+.gcard .gcounts .ok { color: var(--accent-text); }
+.gcard .gcounts .succ { color: var(--green); }
 .gcard.add { display: grid; place-items: center; color: var(--muted2); border-style: dashed; border-color: var(--line2); background: none; min-width: 150px; }
 .gcard.add:hover { border-color: var(--accent-glow); background: oklch(0.84 0.11 350 / .04); transform: none; }
 

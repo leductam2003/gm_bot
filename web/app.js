@@ -308,7 +308,7 @@ async function loadChains() {
   CHAINS = await api("/chains"); CHAINS.sort((a,b)=>a.id-b.id);
   const disabled=new Set((APP_CFG.chainsDisabled)||[]);   // hide chains turned off in Settings
   const opts = CHAINS.filter(c=>!disabled.has(c.id)).map((c)=>`<option value="${c.id}">${c.name} (${c.id})</option>`).join("");
-  ["balChain","rpcChain","tChain","nftChain","walSendChain","meChain"].forEach((id)=>{ if($(id)) $(id).innerHTML = opts; });
+  ["balChain","rpcChain","tChain","nftChain","walSendChain"].forEach((id)=>{ if($(id)) $(id).innerHTML = opts; });
 }
 
 // ---------- home / dashboard ----------
@@ -797,9 +797,15 @@ function renderWLLive(){
 
 // ---------- tasks ----------
 let TASK_SEL = new Set(), LAST_TASK_KEYS = [], MASS_IDS = [];
+// Ids just deleted. A running/armed task emits a trailing WS snapshot AFTER its DELETE
+// (Stop → emit, plus the coalesced trailing emit up to 150ms later) — arriving after
+// loadTasks() cleared it, that frame used to re-inject the row, so delete "needed twice".
+// Task ids are monotonic and never reused, so a dead id stays dead safely; loadTasks
+// self-heals the set if an id turns out to still exist (a genuinely failed delete).
+let DEAD_TASKS = new Set();
 let TASK_GROUPS = new Set((()=>{ try { return JSON.parse(localStorage.getItem("taskGroups")||'["Imported"]'); } catch { return ["Imported"]; } })());
 function saveGroups(){ try { localStorage.setItem("taskGroups", JSON.stringify([...TASK_GROUPS])); } catch {} }
-async function loadTasks(){ const ts=await api("/tasks"); TASKS={}; ts.forEach(t=>TASKS[t.id]=t); if(!WALLETS.length){ try{ WALLETS=await api("/wallets"); }catch{} } renderTasks(); }
+async function loadTasks(){ const ts=await api("/tasks"); TASKS={}; ts.forEach(t=>TASKS[t.id]=t); ts.forEach(t=>DEAD_TASKS.delete(t.id)); if(!WALLETS.length){ try{ WALLETS=await api("/wallets"); }catch{} } renderTasks(); }
 function taskStatusHTML(r){
   if(r.status==="running") return `<span class="st s-running"><svg class="i spin" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>${(r.detail||"Running").slice(0,28)}</span>`;
   const label = r.status==="idle" ? "Ready" : (r.detail ? r.detail.slice(0,28) : r.status);
@@ -812,12 +818,12 @@ function renderTasks(){
   const evmCount=WALLETS.filter(w=>w.network==="evm").length;
   const rowCount=t=>(t.walletIds&&t.walletIds.length)?t.walletIds.length:(evmCount||(t.wallets||[]).length);
   const groups={};
-  all.forEach(t=>{ TASK_GROUPS.add(t.group); const g=groups[t.group]=groups[t.group]||{tasks:0,run:0,fail:0};
-    g.tasks+=rowCount(t); const w=t.wallets||[]; g.run+=w.filter(x=>x.status==="running").length; g.fail+=w.filter(x=>x.status==="failed").length; });
-  $("taskGroups").innerHTML = [...TASK_GROUPS].map(g=>{ const s=groups[g]||{tasks:0,run:0,fail:0};
+  all.forEach(t=>{ TASK_GROUPS.add(t.group); const g=groups[t.group]=groups[t.group]||{tasks:0,run:0,succ:0,fail:0};
+    g.tasks+=rowCount(t); const w=t.wallets||[]; g.run+=w.filter(x=>x.status==="running").length; g.succ+=w.filter(x=>x.status==="success").length; g.fail+=w.filter(x=>x.status==="failed").length; });
+  $("taskGroups").innerHTML = [...TASK_GROUPS].map(g=>{ const s=groups[g]||{tasks:0,run:0,succ:0,fail:0};
     return `<div class="gcard ${g===CUR_GROUP?'active':''}" onclick="pickGroup('${g}')">
        <div class="gtitle">${IC.box} <span>${g}</span><span class="gdel" title="Delete group" onclick="delGroup('${g}',event)">${IC.trash}</span></div>
-       <div class="gcounts"><span>${s.tasks} tasks</span><span class="ok">${s.run} running</span><span style="color:var(--danger)">${s.fail} failed</span></div></div>`; }).join("")
+       <div class="gcounts"><span>${s.tasks} tasks</span><span class="ok">${s.run} running</span><span class="succ">${s.succ} success</span><span style="color:var(--danger)">${s.fail} failed</span></div></div>`; }).join("")
     + `<div class="gcard add" onclick="newGroup()">+ New Group</div>`;
   // per-wallet rows for the active group
   const groupTasks=all.filter(t=>t.group===CUR_GROUP);
@@ -897,56 +903,34 @@ async function bulkTask(action){
 async function bulkDeleteTasks(){
   const ids=distinctTaskIds(); if(!ids.length) return;
   if(!await confirmDialog(`Delete ${ids.length} selected task(s)?`,"Delete")) return;
-  for(const id of ids){ await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); }
+  for(const id of ids){ DEAD_TASKS.add(id); await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); delete TASKS[id]; }
   TASK_SEL.clear(); loadTasks(); toast("Tasks deleted","info");
 }
 async function delGroup(g, ev){ if(ev) ev.stopPropagation();
   const ids=Object.values(TASKS).filter(t=>t.group===g).map(t=>t.id);
   if(ids.length && !await confirmDialog(`Delete group "${g}" and its ${ids.length} task(s)?`,"Delete")) return;
-  for(const id of ids){ await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); }
+  for(const id of ids){ DEAD_TASKS.add(id); await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); delete TASKS[id]; }
   TASK_GROUPS.delete(g); saveGroups(); if(CUR_GROUP===g) CUR_GROUP=[...TASK_GROUPS][0]||"Imported"; TASK_SEL.clear(); loadTasks();
 }
-// Mass edit: edit the distinct tasks of the selected wallet rows.
-let MASS_SEL=0;
-function editSelected(){
-  MASS_IDS=[...new Set([...TASK_SEL].map(k=>Number(k.split(":")[0])))];
-  if(!MASS_IDS.length) return toast("Select rows first — their tasks will be edited","info");
-  MASS_SEL=TASK_SEL.size;  // report by selected rows (tasks), not config count
-  ["meContract","meChain","meFn","meParams","meValue","meMode","meStart","meGroup","meGasMode","meMaxFee","mePrio","meDelay","meMulti","meFlash"]
-    .forEach(id=>{ const cb=$(id+"On"); if(cb)cb.checked=false; });
-  $("massCount").textContent=`(${MASS_SEL} task${MASS_SEL>1?'s':''})`;
-  $("massApplyBtn").textContent=`Apply to ${MASS_SEL}`;
-  openModal("massEditModal");
-}
-async function applyMassEdit(){
-  if(!MASS_IDS.length) return;
-  let ok=0, fail=0;
-  for(const id of MASS_IDS){
-    let cfg; try{ cfg=await api("/tasks/"+id); }catch{ fail++; continue; }
-    cfg.gas=cfg.gas||{mode:"auto"};
-    if($("meContractOn").checked) cfg.contractAddress=$("meContract").value.trim();
-    if($("meChainOn").checked) cfg.chainId=Number($("meChain").value);
-    if($("meFnOn").checked){ cfg.functionSig=$("meFn").value.trim(); cfg.hexMode=false; }
-    if($("meParamsOn").checked) cfg.params=$("meParams").value.split(";").map(s=>s.trim()).filter(s=>s!=="");
-    if($("meValueOn").checked) cfg.valueWei=$("meValue").value.trim()||"0";
-    if($("meModeOn").checked) cfg.mode=$("meMode").value;
-    if($("meStartOn").checked) cfg.startAt=Number($("meStart").value)||0;
-    if($("meGroupOn").checked) cfg.group=$("meGroup").value.trim()||cfg.group;
-    if($("meGasModeOn").checked) cfg.gas.mode=$("meGasMode").value;
-    if($("meMaxFeeOn").checked) cfg.gas.maxFeeGwei=Number($("meMaxFee").value)||0;
-    if($("mePrioOn").checked) cfg.gas.priorityFeeGwei=Number($("mePrio").value)||0;
-    if($("meDelayOn").checked) cfg.delayMs=Number($("meDelay").value)||0;
-    if($("meMultiOn").checked) cfg.multiRpc=$("meMulti").value==="true";
-    if($("meFlashOn").checked) cfg.flashbots=$("meFlash").value==="true";
-    try{ await api("/tasks/"+id,{method:"PUT",body:JSON.stringify(cfg)}); ok++; }catch{ fail++; }
+// "Edit" on the selection reuses the SAME full task form as the per-row ✎ (SeaDrop phase
+// block + Refresh OpenSea button and all) — no stripped checkbox modal. One distinct task
+// (the usual case: one drop, N wallets) is edited whole; if several distinct tasks are
+// selected, the full form is applied to every one of them on Save (see createTask).
+async function editSelected(){
+  const ids=distinctTaskIds();
+  if(!ids.length) return toast("Select rows first — their task will be edited","info");
+  await openTaskEdit(ids[0]);   // whole-task edit (resets MASS_IDS), full rich form
+  if(ids.length>1){
+    MASS_IDS=ids;
+    $("taskModalTitle").textContent=`Edit ${ids.length} tasks · applies to all`;
+    $("taskSubmitBtn").textContent=`Save ${ids.length}`;
   }
-  closeModal("massEditModal"); loadTasks(); toast(`Edited ${MASS_SEL} task(s)${fail?` · ${fail} config(s) skipped (running?)`:""}`, fail?"info":"success");
 }
-async function deleteGroupTasks(){ const ids=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).map(t=>t.id); if(!ids.length) return; if(!await confirmDialog(`Delete all ${ids.length} task(s) in ${CUR_GROUP}?`,"Delete")) return; for(const id of ids){ await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); } loadTasks(); toast("Tasks deleted","info"); }
+async function deleteGroupTasks(){ const ids=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).map(t=>t.id); if(!ids.length) return; if(!await confirmDialog(`Delete all ${ids.length} task(s) in ${CUR_GROUP}?`,"Delete")) return; for(const id of ids){ DEAD_TASKS.add(id); await api("/tasks/"+id,{method:"DELETE"}).catch(()=>{}); delete TASKS[id]; } loadTasks(); toast("Tasks deleted","info"); }
 function pickGroup(g){ CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); }
 async function newGroup(){ const g=await promptDialog("New Group","Group name"); if(g){ TASK_GROUPS.add(g); saveGroups(); CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); } }
 async function taskAction(id,action,walletId){ const q=walletId?`?wallet=${walletId}`:""; try{ await api(`/tasks/${id}/${action}${q}`,{method:"POST"}); if(action==="boost") toast("Boost — rebroadcasting pending tx with higher gas (same nonce)","info"); }catch(e){toast(e.message,"error");} }
-async function delTask(id){ if(await confirmDialog("Delete task?","Delete")){ await api("/tasks/"+id,{method:"DELETE"}); loadTasks(); toast("Task deleted","info"); } }
+async function delTask(id){ if(await confirmDialog("Delete task?","Delete")){ DEAD_TASKS.add(id); await api("/tasks/"+id,{method:"DELETE"}); delete TASKS[id]; loadTasks(); toast("Task deleted","info"); } }
 // Start All / Stop All act on EVERY task of the current group — no selection needed.
 async function startGroup(){ const n=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).length; if(!n) return toast("No tasks in this group","info"); try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/start`,{method:"POST"}); toast(`Start all → ${n} task(s) in ${CUR_GROUP}`,"success"); }catch(e){toast(e.message,"error");} }
 async function stopGroup(){ const n=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).length; if(!n) return toast("No tasks in this group","info"); try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/stop`,{method:"POST"}); toast(`Stop all → ${n} task(s) in ${CUR_GROUP}`,"info"); }catch(e){toast(e.message,"error");} }
@@ -1083,7 +1067,8 @@ function renderSeadropBlock(name, maxPerWallet, phases){
   if(!hint) return;
   hint.style.display="block";
   hint.innerHTML=`
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${escHtml(name||"collection")}</b></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px"><span class="badge on">SEADROP</span><b>${escHtml(name||"collection")}</b>
+      <button id="seaRefreshBtn" class="sm" style="margin-left:auto" onclick="refreshSeadrop()" title="Re-read phase / price / supply from the contract (and OpenSea) — the dev may have changed the drop">&#8635; Refresh OpenSea data</button></div>
     <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:end">
       <label class="fld">Mint Phase<select id="tMintPhase" onchange="onPhaseChange()">${opts}</select></label>
       <label class="fld"><span id="tQtyMaxLbl">NFT Amount (max ${SEADROP_MAX})</span><input id="tQty" value="1" /></label>
@@ -1091,6 +1076,18 @@ function renderSeadropBlock(name, maxPerWallet, phases){
     </div>
     <div class="muted" id="tPhaseStart" style="margin-top:9px;text-transform:none"></div>`;
   onPhaseChange();   // fill price + Start Time from the first phase
+}
+// "Refresh OpenSea data": re-resolve the collection so a dev's updated phase / price /
+// supply / start time is picked up. Re-runs the same resolve as pasting the contract,
+// preserving the qty the user picked (drop data is authoritative for price/max/start).
+async function refreshSeadrop(){
+  const qty=($("tQty")||{}).value;
+  const btn=$("seaRefreshBtn"); if(btn){ btn.disabled=true; btn.textContent="Refreshing…"; }
+  try{ await resolveTaskLink(); }
+  finally{
+    if(qty && $("tQty")) $("tQty").value=qty;
+    const b=$("seaRefreshBtn"); if(b){ b.disabled=false; b.innerHTML="&#8635; Refresh OpenSea data"; }
+  }
 }
 async function resolveTaskLink(){
   const v=$("tContract").value.trim(); if(!v) return;
@@ -1103,7 +1100,7 @@ async function resolveTaskLink(){
     if(r.seadrop){
       // Use the GraphQL phases (public + allowlist) if present, else a single public phase.
       const phases = (Array.isArray(r.phases) && r.phases.length) ? r.phases
-        : [{index:0,kind:"public",priceEth:weiToEthStr(r.priceWei),priceWei:r.priceWei||"0",startUnix:0,endUnix:0,maxPerWallet:r.maxPerWallet||1}];
+        : [{index:0,kind:"public",priceEth:weiToEthStr(r.priceWei),priceWei:r.priceWei||"0",startUnix:r.startUnix||0,endUnix:r.endUnix||0,maxPerWallet:r.maxPerWallet||1}];
       renderSeadropBlock(r.name, r.maxPerWallet, phases);
       // Keep the current mode (Simulate by default) — don't force Action on link paste.
     } else {
@@ -1145,7 +1142,7 @@ function resetTaskForm(){
   const fr=$("fnRow"); if(fr) fr.style.display=""; const pr=$("paramsRow"); if(pr) pr.style.display="";
 }
 async function openTaskModal(){
-  EDIT_ID=null; EDIT_CFG=null; EDIT_WALLET=null; ensureSelectors(); resetTaskForm();
+  EDIT_ID=null; EDIT_CFG=null; EDIT_WALLET=null; MASS_IDS=[]; ensureSelectors(); resetTaskForm();
   await taskWS.reload(); taskWS.clear();
   if(taskRS){ await taskRS.reload(); taskRS.clear(); }
   try{ PROXIES = await api("/proxies"); }catch{} fillProxyGroups(); if($("tProxyGroup")) $("tProxyGroup").value="";
@@ -1153,7 +1150,7 @@ async function openTaskModal(){
 }
 async function openTaskEdit(id, walletId){
   let base; try{ base=await api("/tasks/"+id); }catch(e){ return toast(e.message,"error"); }
-  EDIT_ID=id; EDIT_CFG=base; ensureSelectors(); resetTaskForm(); EDIT_WALLET=walletId||null;
+  EDIT_ID=id; EDIT_CFG=base; MASS_IDS=[]; ensureSelectors(); resetTaskForm(); EDIT_WALLET=walletId||null;
   // Fill the form from this wallet's EFFECTIVE config (its override if it has one), but keep
   // EDIT_CFG = the base task so saving writes the override back into the SAME task.
   const cfg=(walletId && base.walletOverrides && base.walletOverrides[walletId]) ? {...base, ...base.walletOverrides[walletId]} : base;
@@ -1229,6 +1226,17 @@ async function createTask(){
   if(!cfg.hexMode && !effSeadrop && !cfg.functionSig)
     return toast("Set a Function (e.g. mint(uint256)), enable Hex, or paste a SeaDrop link/address","error");
   try{
+    if(MASS_IDS.length>1){
+      // Apply the full form to every selected task, but keep each task's OWN wallets and
+      // per-wallet overrides (the form's wallet picker only reflects the first task).
+      const applied={...cfg}; delete applied.walletIds;
+      let ok=0, fail=0;
+      for(const id of MASS_IDS){
+        try{ const orig=await api("/tasks/"+id); await api("/tasks/"+id,{method:"PUT",body:JSON.stringify({...orig,...applied,id})}); ok++; }catch{ fail++; }
+      }
+      TASK_GROUPS.add(cfg.group); saveGroups(); CUR_GROUP=cfg.group; MASS_IDS=[]; closeModal("taskModal"); loadTasks();
+      return toast(`Edited ${ok} task(s)${fail?` · ${fail} skipped (running?)`:""}`, fail?"info":"success");
+    }
     if(EDIT_ID){
       const orig=EDIT_CFG||{};
       let origIds=(orig.walletIds&&orig.walletIds.length)?orig.walletIds.slice():WALLETS.filter(w=>w.network==="evm").map(w=>w.id);
@@ -1602,7 +1610,7 @@ async function loadSettingsPanel(){
   if($("setFbWindow")) $("setFbWindow").value = APP_CFG.fbWindowBlocks!=null ? APP_CFG.fbWindowBlocks : "";
   if($("setFbPrio")) $("setFbPrio").value = APP_CFG.fbPriorityGwei!=null ? APP_CFG.fbPriorityGwei : "";
   if($("setFbMax")) $("setFbMax").value = APP_CFG.fbMaxFeeGwei!=null ? APP_CFG.fbMaxFeeGwei : "";
-  if($("setUpdRepo")) $("setUpdRepo").value = APP_CFG.updateRepo || "";
+  if($("setUpdRepo")) $("setUpdRepo").value = APP_CFG.updateRepo || "leductam2003/gm_bot";
   if($("updVer") && VER) $("updVer").textContent = "v"+VER;
   renderChainsCard();
   applyScale(localStorage.getItem("uiScale") || 100);
@@ -1671,16 +1679,24 @@ async function saveUpdRepo(){
   try{ await api("/appsettings",{method:"POST",body:JSON.stringify({updateRepo:repo})}); await loadAppCfg(); toast("Update source saved","success"); }
   catch(e){ toast(e.message,"error"); }
 }
-async function checkUpdate(){
-  const st=$("updStatus"); if(st) st.textContent="checking…";
+// silent=true (auto-check on open + every 5 min): update the status line quietly and only
+// toast when a NEW version first appears — never nag "up to date" or errors in the
+// background. The manual Check button passes silent=false for full feedback.
+let _updNotified="";
+async function checkUpdate(silent){
+  const st=$("updStatus"); if(st && !silent) st.textContent="checking…";
   try{
     const r=await api("/update/check");
     if($("updVer")) $("updVer").textContent="v"+(r.current||"?");
-    if(!r.configured){ if(st) st.textContent="set an update source first"; toast("Set a GitHub owner/repo, then Check","info"); return; }
-    if(r.hasUpdate){ const safe=(r.url&&/^https:\/\//i.test(r.url))?escHtml(r.url):"#"; if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${escHtml(r.latest)} available</span> · <a href="${safe}" target="_blank" rel="noopener">release</a>`; toast(`Update available: v${r.latest}`,"success"); }
-    else if(r.note){ if(st) st.textContent=r.note; toast(r.note,"info"); }
-    else { if(st) st.textContent="up to date ✓"; toast("You're on the latest version","info"); }
-  }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
+    if(!r.configured){ if(st) st.textContent="set an update source first"; if(!silent) toast("Set a GitHub owner/repo, then Check","info"); return; }
+    if(r.hasUpdate){
+      const safe=(r.url&&/^https:\/\//i.test(r.url))?escHtml(r.url):"#";
+      if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${escHtml(r.latest)} available</span> · <a href="${safe}" target="_blank" rel="noopener">release</a>`;
+      if(!silent || _updNotified!==r.latest){ toast(`Update available: v${r.latest}`,"success"); _updNotified=r.latest; }
+    }
+    else if(r.note){ if(st) st.textContent=r.note; if(!silent) toast(r.note,"info"); }
+    else { if(st) st.textContent="up to date ✓"; if(!silent) toast("You're on the latest version","info"); }
+  }catch(e){ if(st && !silent) st.textContent=""; if(!silent) toast(e.message,"error"); }
 }
 async function loadTelegram(){
   try{ const r=await api("/telegram"); const c=r.config||{};
@@ -1739,7 +1755,7 @@ function connectWS(){
   ws.onopen=()=>{ $("wsState").textContent="live"; $("wsState").style.color="var(--accent)"; setOffline(false); if(!CHAINS.length) bootData().catch(()=>{}); };
   ws.onclose=()=>{ $("wsState").textContent="offline"; $("wsState").style.color="var(--danger)"; setTimeout(connectWS,2000); };
   ws.onmessage=(ev)=>{ let m; try{m=JSON.parse(ev.data);}catch{return;}
-    if(m.type==="task"){ TASKS[m.data.id]=m.data; scheduleRender(); homeMaybeRefresh(); }
+    if(m.type==="task"){ if(DEAD_TASKS.has(m.data.id)) return; TASKS[m.data.id]=m.data; scheduleRender(); homeMaybeRefresh(); }
     else if(m.type==="log"){ queueLog(m.data); }
     else if(m.type==="accept"){ nftOnAccept(m.data); homeMaybeRefresh(); }
     else if(m.type==="home"){ homeMaybeRefresh(); }
@@ -1770,4 +1786,5 @@ async function bootData(){
   try { await bootData(); }
   catch(e){ setOffline(true); } // banner explains; WS reconnect will retry
   tickGwei(); setInterval(tickGwei, 15000);
+  checkUpdate(true); setInterval(()=>checkUpdate(true), 300000); // auto-check on open + every 5 min (silent)
 })();
