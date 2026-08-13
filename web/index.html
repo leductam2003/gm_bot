@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>GM Suite</title>
+<title>GM Bot</title>
 <link rel="icon" href="data:," />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,7 +18,7 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="logo"><svg class="i" viewBox="0 0 24 24" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.5 5.5l2 2M16.5 16.5l2 2M18.5 5.5l-2 2M7.5 16.5l-2 2"/></svg></div>
-      <div class="name">GM<small>SUITE</small></div>
+      <div class="name">GM<small>BOT</small></div>
     </div>
     <div class="ver"><span id="wsState"></span></div>
     <nav id="nav">
@@ -34,7 +34,7 @@
       <a data-tab="logs"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="lbl">Logs</span></a>
     </nav>
     <div class="sb-foot">
-      <div class="verline"><span id="footVer">v1.3.0</span><span class="upd" onclick="go('settings');goSub('app');setTimeout(checkUpdate,300)" style="cursor:pointer">CHECK UPDATES</span></div>
+      <div class="verline"><span id="footVer">v1.3.2</span><span class="upd" onclick="go('settings');goSub('app');setTimeout(checkUpdate,300)" style="cursor:pointer">CHECK UPDATES</span></div>
       <div class="clock"><svg class="i" viewBox="0 0 24 24"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg> <span id="clock">00:00:00</span> <span class="drift">+2.3s</span></div>
       <div class="gwei"><svg class="i" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg> <span class="lbl">ETH</span> <b id="gwei">&mdash;</b> <span style="font-size:9px;color:var(--muted3)">gwei</span></div>
     </div>
@@ -43,7 +43,7 @@
   <!-- MAIN -->
   <div class="main">
     <div class="topbar">
-      <div class="crumb">SUITE / <b id="crumb">TASKS</b></div>
+      <div class="crumb">GM BOT / <b id="crumb">TASKS</b></div>
       <div class="dots">
         <span class="y" onclick="wMin(event)" title="Minimize"></span>
         <span class="g" onclick="wMax(event)" title="Maximize"></span>
@@ -210,9 +210,9 @@
             <!-- ===== APP ===== -->
             <div id="sub-app">
               <div class="card">
-                <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.0</span></div></div>
+                <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.2</span></div></div>
                 <p class="muted" style="margin-top:-4px">Auto-checks on open and every 5 minutes. When a newer build is published, Install downloads and unpacks it next to the exe (your data — wallets, tasks, keys — is untouched), then asks you to restart.</p>
-                <label class="fld">Update source (GitHub owner/repo)<input id="setUpdRepo" placeholder="owner/zyper-bot" /></label>
+                <label class="fld">Update source (GitHub owner/repo)<input id="setUpdRepo" placeholder="leductam2003/gm_bot" /></label>
                 <div class="row" style="margin-top:12px"><button class="primary sm" onclick="checkUpdate()">Check for Update</button><button class="sm" onclick="saveUpdRepo()">Save Repo</button><button class="primary sm" id="updInstallBtn" style="display:none" onclick="installUpdate()">Install &amp; Restart</button><span class="muted" id="updStatus"></span></div>
               </div>
               <div class="card">

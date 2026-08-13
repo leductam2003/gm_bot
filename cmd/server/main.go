@@ -1,4 +1,4 @@
-// Command server is the zyperbot HTTP dashboard entrypoint.
+// Command server is the GM Bot HTTP dashboard entrypoint.
 package main
 
 import (
@@ -146,7 +146,7 @@ func main() {
 		<-stop
 	} else {
 		waitReady(guiURL, 3*time.Second)
-		if !launchGUI(guiURL, "Zyper Bot") {
+		if !launchGUI(guiURL, "GM Bot") {
 			slog.Info("no desktop window — open in a browser", "url", guiURL)
 			<-stop
 		}

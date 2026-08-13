@@ -123,8 +123,10 @@ nav a.active::after { content: ""; margin-left: auto; width: 5px; height: 5px; b
 .toolbtns { display: flex; gap: 8px; align-items: center; }
 
 /* group cards */
-.groups { display: flex; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
-.gcard { min-width: 240px; padding: 16px 18px; border-radius: 13px; cursor: pointer; transition: transform .2s, box-shadow .2s, border-color .2s;
+/* Auto-fit grid: cards stretch to fill each row (no trailing empty gap on the right),
+   wrap cleanly, and stay ≥240px. min(240px,100%) prevents overflow on a narrow window. */
+.groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px; margin-bottom: 16px; }
+.gcard { padding: 16px 18px; border-radius: 13px; cursor: pointer; transition: transform .2s, box-shadow .2s, border-color .2s;
   background: linear-gradient(160deg, rgba(255,255,255,.02), rgba(255,255,255,.005)); border: 1px solid var(--line); }
 .gcard:hover { transform: translateY(-2px); }
 .gcard.active { background: linear-gradient(160deg, oklch(0.84 0.11 350 / .07), rgba(255,255,255,.01)); border-color: var(--accent-line);

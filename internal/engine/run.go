@@ -228,10 +228,33 @@ func (e *Engine) runTask(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, g
 		// passed must take the legacy path, where estimateGas still guards against
 		// broadcasting into a closed/sold-out mint (the fallback limit would bypass it).
 		if canPreArm(cfg) && time.Until(time.Unix(cfg.StartAt, 0)) > 2*time.Second {
-			if waitUntil(ctx, cfg.StartAt-armLeadFor(cfg.ID)) {
-				// Bound prep at T-0.5s: one hung RPC must not drag every wallet past
-				// the start second; whatever misses the cut retries via the leftover
-				// pass at T0.
+			lastArmBy := cfg.StartAt - armLeadFor(cfg.ID)
+			// Arm the moment Start is pressed (warms the RPC pool + signs a ready tx), then
+			// re-sign with fresh fees every armRefreshInterval — so a long wait keeps the
+			// connections warm and never fires stale-fee txs, instead of a single sign at
+			// T-15s. Bounded so a hung RPC can't stall the refresh loop.
+			ac, acancel := context.WithTimeout(ctx, armRefreshInterval)
+			armed = e.preArm(ac, rt, cfg, wallets, value)
+			acancel()
+			for time.Now().Unix() < lastArmBy {
+				next := time.Now().Add(armRefreshInterval).Unix()
+				if next >= lastArmBy {
+					break // the final arm below is the last (and freshest) one
+				}
+				if !waitUntil(ctx, next) {
+					break // stopped mid-wait; the StartAt wait below runs the cleanup
+				}
+				rc, rcancel := context.WithTimeout(ctx, armRefreshInterval)
+				armed = e.refreshArmed(rc, rt, cfg, armed)
+				rcancel()
+			}
+			// Final arm at the staggered lead: a full fresh prep (calldata + nonce + fees),
+			// identical to the pre-refresh behavior and what actually fires. Nonces from the
+			// earlier arm are released first so preArm's refetch matches (no counter drift).
+			if ctx.Err() == nil && waitUntil(ctx, lastArmBy) {
+				for _, a := range armed {
+					e.nonce.Invalidate(a.lw.addr)
+				}
 				pctx, pcancel := context.WithDeadline(ctx, time.Unix(cfg.StartAt, 0).Add(-500*time.Millisecond))
 				armed = e.preArm(pctx, rt, cfg, wallets, value)
 				pcancel()
@@ -423,6 +446,12 @@ const receiptPollTimeout = 4 * time.Second
 // smears prep across a 30s window; the fire time itself is unaffected.
 const armSpreadSec = 30
 
+// armRefreshInterval is how often a task waiting for StartAt re-signs its armed txs with
+// current fees (which also pings the RPC, keeping the pool warm) after the immediate arm
+// at Start — so a long pre-arm never fires stale-fee txs. The final full arm still lands
+// at armLeadFor, close enough to StartAt to complete yet spread to avoid a 429 storm.
+const armRefreshInterval = 60 * time.Second
+
 // armLeadFor returns the per-task pre-arm lead (seconds before StartAt).
 func armLeadFor(taskID int64) int64 {
 	if taskID < 0 {
@@ -529,6 +558,47 @@ func (e *Engine) preArm(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, wa
 	wg.Wait()
 	e.log.Task(logger.INFO, fmt.Sprintf("pre-armed %d/%d wallets (signed; broadcast-only at start)", len(out), len(wallets)), cfg.ID, nil)
 	return out
+}
+
+// refreshArmed re-signs each already-armed tx with current fees, keeping the signed set
+// fresh across a long wait after the immediate arm. Fees are the only thing that drifts
+// while nothing broadcasts — the nonce and calldata are stable — so this deliberately does
+// NOT re-reserve nonces (no counter drift, no disruption to a wallet shared with another
+// task) and does NOT rebuild calldata; the final full arm at armLeadFor refreshes those.
+// The fee lookup doubles as a keep-alive that holds the RPC connections open. A wallet
+// whose fee refresh fails keeps its last good signature.
+func (e *Engine) refreshArmed(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, prev []*armedTx) []*armedTx {
+	if len(prev) == 0 {
+		return prev
+	}
+	var shared evm.ResolvedFees
+	if fees, err := e.sharedFees(ctx, cfg); err == nil {
+		shared = fees
+	}
+	refreshed := 0
+	for _, a := range prev {
+		fees := shared
+		if cfg.hasOverride(a.lw.id) || fees.MaxFeePerGas == nil {
+			// Per-wallet gas override (or the shared resolve failed) — price this wallet on its own.
+			if f, ferr := evm.ResolveFees(ctx, a.nodes[0].Client, a.cfg.Gas); ferr == nil {
+				fees = f
+			}
+		}
+		if fees.MaxFeePerGas == nil {
+			continue // couldn't refresh fees — keep the last good signature
+		}
+		tx, serr := evm.SignTx(a.lw.key, evm.TxRequest{
+			ChainID: big.NewInt(int64(a.cfg.ChainID)), Nonce: a.nonce, To: a.to, Data: a.data, Value: a.value,
+			GasLimit: a.gasLimit, MaxFeePerGas: fees.MaxFeePerGas, MaxPriority: fees.MaxPriorityFeePerGas,
+		})
+		if serr != nil {
+			continue // keep the last good signature
+		}
+		a.tx, a.fees = tx, fees
+		refreshed++
+	}
+	e.log.Task(logger.INFO, fmt.Sprintf("re-armed %d/%d wallets (fresh fees, pool kept warm)", refreshed, len(prev)), cfg.ID, nil)
+	return prev
 }
 
 // spamMinIntervalMs floors the gap between two sends of one wallet when the task sets

@@ -1,4 +1,4 @@
-// Zyper Bot dashboard client.
+// GM Bot dashboard client.
 const $ = (id) => document.getElementById(id);
 let OFFLINE = false;
 function setOffline(b) {
@@ -17,7 +17,7 @@ const api = async (path, opts = {}) => {
   } catch (e) {
     // Network-level failure (server down / opened via file:// / wrong host).
     setOffline(true);
-    throw new Error("Cannot reach the server. Is zyper-bot running? Open http://<host>:8787 (not the .html file).");
+    throw new Error("Cannot reach the server. Is GM Bot running? Open the app window (not the .html file).");
   }
   setOffline(false);
   const body = await res.json().catch(() => ({}));
@@ -301,7 +301,14 @@ document.querySelectorAll(".overlay").forEach((o) => o.addEventListener("click",
 
 // ---------- status (vault is auto-managed; no password) ----------
 let VER = "";
-async function refreshStatus() { try { const s = await api("/status"); if (s && s.version) VER = s.version; return s; } catch { return {}; } }
+// Reflect the real running version (from /status) in BOTH version labels — the sidebar
+// footer and the Settings card. Without this the sidebar showed a hardcoded "v1.3.0".
+function setVerLabels() {
+  if (!VER) return;
+  const f = $("footVer"); if (f) f.textContent = "v" + VER;
+  const u = $("updVer"); if (u) u.textContent = "v" + VER;
+}
+async function refreshStatus() { try { const s = await api("/status"); if (s && s.version) { VER = s.version; setVerLabels(); } return s; } catch { return {}; } }
 
 // ---------- chains ----------
 async function loadChains() {
@@ -1725,7 +1732,7 @@ async function restartApp(){
   toast("Restarting…","info");
   try{ await api("/update/restart",{method:"POST"}); }catch{}
   const st=$("updStatus");
-  setTimeout(()=>{ if(st) st.textContent="restarting — if the window doesn't reopen, launch zyper-bot again"; }, 900);
+  setTimeout(()=>{ if(st) st.textContent="restarting — if the window doesn't reopen, launch GM Bot again"; }, 900);
 }
 async function loadTelegram(){
   try{ const r=await api("/telegram"); const c=r.config||{};
