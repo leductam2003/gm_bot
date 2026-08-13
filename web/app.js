@@ -669,10 +669,14 @@ function openRpcModal(){ openModal("rpcModal"); }
 async function addRPC(){ try{ await api("/rpc",{method:"POST",body:JSON.stringify({name:$("rpcName").value,chainId:Number($("rpcChain").value),url:$("rpcUrl").value})}); closeModal("rpcModal"); $("rpcUrl").value=""; loadRPC(); toast("RPC added","success"); }catch(e){toast(e.message,"error");} }
 async function delRPC(id){ await api("/rpc/"+id,{method:"DELETE"}); loadRPC(); }
 async function testRPC(){
-  const urls=[...document.querySelectorAll("#rpcRows .lat")].map(td=>td.dataset.url); if(!urls.length)return;
+  const tds=[...document.querySelectorAll("#rpcRows .lat")];
+  // data-url is encodeURIComponent'd (see loadRPC) — DECODE before sending, or the backend
+  // gets "https%3A%2F%2F…", fails the prefix check, and every probe reports fail.
+  const urls=tds.map(td=>decodeURIComponent(td.dataset.url)); if(!urls.length)return;
+  tds.forEach(td=>td.innerHTML='<span class="muted">…</span>');
   const res=await api("/rpc/test",{method:"POST",body:JSON.stringify({urls})});
   const map={}; res.forEach(p=>map[p.url]=p);
-  document.querySelectorAll("#rpcRows .lat").forEach(td=>{ const p=map[td.dataset.url]; if(!p){td.innerHTML="—";return;}
+  tds.forEach(td=>{ const p=map[decodeURIComponent(td.dataset.url)]; if(!p){td.innerHTML="—";return;}
     td.innerHTML = p.ok ? `<span style="color:var(--accent)">${p.latencyMs} ms</span>` : `<span style="color:var(--danger)">fail</span>`; });
 }
 
