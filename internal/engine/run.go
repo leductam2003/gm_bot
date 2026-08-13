@@ -305,14 +305,18 @@ func (e *Engine) runTask(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, g
 	switch {
 	case cfg.Mode == ModeSimulate || cfg.Mode.isInstant():
 		if len(armed) > 0 {
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() { defer wg.Done(); e.fireArmed(ctx, rt, armed) }()
 			if len(leftovers) > 0 {
-				wg.Add(1)
+				// Fire the armed set and the T0 leftover pass concurrently.
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() { defer wg.Done(); e.fireArmed(ctx, rt, armed) }()
 				go func() { defer wg.Done(); e.runPass(ctx, rt, cfg, leftovers, value) }()
+				wg.Wait()
+			} else {
+				// Common full-arm case: fire inline — no wrapper goroutine + WaitGroup hop
+				// between T0 and the first SendTransaction.
+				e.fireArmed(ctx, rt, armed)
 			}
-			wg.Wait()
 		} else {
 			e.runPass(ctx, rt, cfg, wallets, value)
 		}
@@ -943,10 +947,11 @@ func (e *Engine) prepOne(ctx context.Context, rt *TaskRuntime, cfg TaskConfig, v
 func (e *Engine) fireOne(ctx context.Context, rt *TaskRuntime, a *armedTx) {
 	cfg, lw := a.cfg, a.lw
 	client := a.nodes[0].Client
-	// Status flips to "running" but we do NOT emit here: at a 1000-wallet T0 that
-	// would fire 1000 snapshot marshals into the exact race instant. The broadcast
-	// result emit below carries the status; the UI is at most one broadcast late.
-	rt.setWallet(lw.id, func(w *WalletStatus) { w.Status = "running" })
+	// Deliberately do NOT touch wallet status here: at a 1000-wallet T0, one setWallet
+	// per goroutine would serialize the whole fleet on the single rt.mu in the last step
+	// before SendTransaction — for a value that's immediately overwritten by the broadcast
+	// result below (success/failed/stopped) and never emitted in between. Status is carried
+	// by the post-broadcast setWallet+emit; the arm left it "waiting" until then.
 
 	// Simulate mode = eth_call first, then execute only if it would succeed; on a
 	// revert the wallet fails with the decoded reason and no gas is spent. (Instant
@@ -997,11 +1002,10 @@ func (e *Engine) fireOne(ctx context.Context, rt *TaskRuntime, a *armedTx) {
 		e.emit(rt)
 	}
 
-	chainID := big.NewInt(int64(cfg.ChainID))
-
 	// Flashbots private bundle (ETH mainnet only): never hits the public mempool, so
 	// the mint can't be front-run. Falls through to public broadcast on other chains.
 	if cfg.Flashbots && cfg.ChainID == 1 {
+		chainID := big.NewInt(int64(cfg.ChainID))
 		// Apply Flashbots tuning from Settings: when the task's fees are "auto", override
 		// priority/max with the configured bundle fees (builders pick by economics).
 		ac := e.appConfig()
@@ -1065,7 +1069,7 @@ func (e *Engine) fireOne(ctx context.Context, rt *TaskRuntime, a *armedTx) {
 		if tx == nil {
 			var serr error
 			tx, serr = evm.SignTx(lw.key, evm.TxRequest{
-				ChainID: chainID, Nonce: curNonce, To: a.to, Data: a.data, Value: a.value,
+				ChainID: big.NewInt(int64(cfg.ChainID)), Nonce: curNonce, To: a.to, Data: a.data, Value: a.value,
 				GasLimit: a.gasLimit, MaxFeePerGas: a.fees.MaxFeePerGas, MaxPriority: a.fees.MaxPriorityFeePerGas,
 			})
 			if serr != nil {
