@@ -35,7 +35,8 @@ type Server struct {
 	tg    *telegram.Service
 	osc   *opensea.Client
 
-	fundCancels sync.Map // runId -> context.CancelFunc for in-flight disperse/consolidate
+	fundCancels sync.Map   // runId -> context.CancelFunc for in-flight disperse/consolidate
+	fundLog     fundRunLog // most recent run's streamed results (WS-drop reconciliation)
 }
 
 func New(st *store.Store, vault *crypto.Vault, pool *rpc.Pool, eng *engine.Engine, log *logger.Logger, hub *events.Hub, tg *telegram.Service) *Server {
@@ -81,6 +82,7 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/wallets/balances", s.handleBalances)
 		r.Post("/funds/move", s.handleFundsMove)     // disperse / consolidate (native + ERC-20)
 		r.Post("/funds/cancel", s.handleFundsCancel) // halt an in-flight run
+		r.Get("/funds/status", s.handleFundsStatus)  // replay run results (WS-drop safety net)
 
 		r.Get("/rpc", s.handleListRPC)
 		r.Post("/rpc", s.handleAddRPC)

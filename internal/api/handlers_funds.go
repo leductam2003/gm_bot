@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -39,6 +40,17 @@ type fundsRun struct {
 	isToken   bool
 	decimals  int
 	total     int
+}
+
+// fundRunLog retains the most recent run's streamed results. The WS hub drops frames
+// when a subscriber's buffer is full (Publish is non-blocking), so the UI counter can
+// silently miss legs — 2026-08-13: "194/199 done" while all 199 landed on-chain. GET
+// /api/funds/status replays everything published so far so the UI can reconcile.
+type fundRunLog struct {
+	mu      sync.Mutex
+	runID   string
+	total   int
+	results []fundResult
 }
 
 // fundResult is one streamed Manage-Funds transfer outcome (WS "funds" event).
@@ -440,8 +452,29 @@ func (s *Server) fundsPublisher(runID string, total int) func(fundResult) {
 			}
 			s.log.API(lvl, "funds transfer error", map[string]any{"from": res.From, "to": res.To, "error": res.Error, "fatal": res.Fatal})
 		}
+		// Record before publishing: the WS frame may be dropped, the log is the truth
+		// the /funds/status poll reconciles from. A new runId resets the single slot.
+		s.fundLog.mu.Lock()
+		if s.fundLog.runID != runID {
+			s.fundLog.runID, s.fundLog.total, s.fundLog.results = runID, total, nil
+		}
+		s.fundLog.results = append(s.fundLog.results, res)
+		s.fundLog.mu.Unlock()
 		s.hub.Publish("funds", res)
 	}
+}
+
+// GET /api/funds/status?runId= — replay the streamed results of the most recent run,
+// so the UI can fill rows whose WS frames were dropped (or arrived during a reconnect).
+func (s *Server) handleFundsStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("runId")
+	s.fundLog.mu.Lock()
+	defer s.fundLog.mu.Unlock()
+	results, total := []fundResult{}, 0
+	if id != "" && id == s.fundLog.runID {
+		results, total = s.fundLog.results, s.fundLog.total
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runId": id, "total": total, "results": results})
 }
 
 // gasWithBuffer pads an estimate by 25% (ERC-20 transfer cost varies); falls back to a

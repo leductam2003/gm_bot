@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -102,17 +103,9 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["configured"] = true
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://api.github.com/repos/"+repo+"/releases/latest", nil)
-	req.Header.Set("accept", "application/vnd.github+json")
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	body, status, err := githubGET(r.Context(), "https://api.github.com/repos/"+repo+"/releases/latest")
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		writeErr(w, http.StatusBadGateway, "github "+resp.Status)
 		return
 	}
 	var rel struct {
@@ -120,13 +113,65 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		HTMLURL string `json:"html_url"`
 		Body    string `json:"body"`
 	}
-	_ = json.Unmarshal(body, &rel)
+	if status == http.StatusOK {
+		_ = json.Unmarshal(body, &rel)
+	} else if status == http.StatusNotFound {
+		// No published Release — the common case for a plain code repo. Fall back to the
+		// newest git tag so a bare `git tag vX.Y.Z && git push --tags` is enough to drive
+		// the checker (no formal GitHub Release ceremony needed).
+		tag, turl := latestTag(r.Context(), repo)
+		if tag == "" {
+			out["hasUpdate"] = false
+			out["note"] = "No releases or tags published on " + repo + " yet — push a tag like v1.3.1 to enable update checks."
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		rel.TagName, rel.HTMLURL = tag, turl
+	} else {
+		writeErr(w, http.StatusBadGateway, "github "+http.StatusText(status))
+		return
+	}
 	latest := strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v")
 	out["latest"] = latest
 	out["url"] = rel.HTMLURL
 	out["notes"] = rel.Body
 	out["hasUpdate"] = semverGreater(latest, config.Version)
 	writeJSON(w, http.StatusOK, out)
+}
+
+// githubGET does one GitHub API GET, returning the body and HTTP status (or a transport error).
+func githubGET(ctx context.Context, url string) ([]byte, int, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req.Header.Set("accept", "application/vnd.github+json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return body, resp.StatusCode, nil
+}
+
+// latestTag returns the semver-greatest tag of a repo (name, web URL), or "" if none.
+// The /tags list order isn't semver-sorted, so pick the max ourselves.
+func latestTag(ctx context.Context, repo string) (string, string) {
+	body, status, err := githubGET(ctx, "https://api.github.com/repos/"+repo+"/tags?per_page=100")
+	if err != nil || status != http.StatusOK {
+		return "", ""
+	}
+	var tags []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(body, &tags) != nil || len(tags) == 0 {
+		return "", ""
+	}
+	best := tags[0].Name
+	for _, t := range tags[1:] {
+		if semverGreater(strings.TrimPrefix(t.Name, "v"), strings.TrimPrefix(best, "v")) {
+			best = t.Name
+		}
+	}
+	return best, "https://github.com/" + repo + "/releases/tag/" + best
 }
 
 // semverGreater reports whether a > b for dotted numeric versions (e.g. "1.3.1" > "1.3.0").

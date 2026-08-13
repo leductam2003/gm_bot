@@ -557,7 +557,7 @@ async function openFundsModal(){
   fundToPick && (fundToPick.setWallets(WALLETS), fundToPick.clear());
   ["fToken","fAmount","fToAddr","fConsAmount"].forEach(id=>$(id)&&($(id).value=""));
   $("fMax").checked=true; toggleConsAmount();
-  FUND_RUN=null; $("fundsBtn").disabled=false;
+  FUND_RUN=null; clearInterval(FUND_POLL); $("fundsBtn").disabled=false;
   $("fResults").style.display="none"; $("fResults").innerHTML="";
   pickFundMode("disperse");
   openModal("fundsModal");
@@ -600,15 +600,31 @@ async function doFunds(){
   try{
     const r=await api("/funds/move",{method:"POST",body:JSON.stringify(req)});
     FUND_RUN.total=r.total||0; renderFunds();
+    startFundsPoll();
   }catch(e){ toast(e.message,"error"); FUND_RUN.fatal=e.message; finishFundsRun(); renderFunds(); }
 }
 function stopFunds(){ if(FUND_RUN){ api("/funds/cancel",{method:"POST",body:JSON.stringify({runId:FUND_RUN.id})}).catch(()=>{}); toast("Stopping after the current transfer…","info"); } }
-function finishFundsRun(){ if(FUND_RUN) FUND_RUN.done=true; $("fundsBtn").disabled=false; }
+// The WS hub drops frames when a subscriber's buffer is full, so a "funds" event can
+// silently vanish — the counter then sticks (194/199 done) even though every leg landed
+// on-chain. The server logs each run's results; poll it while the run is live and
+// replay any rows whose WS frame never arrived.
+let FUND_POLL=null;
+function startFundsPoll(){
+  clearInterval(FUND_POLL); let polls=0;
+  FUND_POLL=setInterval(async()=>{
+    if(!FUND_RUN || FUND_RUN.done || ++polls>240){ clearInterval(FUND_POLL); return; } // 240×2.5s = the server's own 10-min run timeout
+    try{
+      const r=await api("/funds/status?runId="+encodeURIComponent(FUND_RUN.id));
+      (r.results||[]).forEach(d=>{ if(FUND_RUN && (d.fatal || !(d.index in FUND_RUN.byIndex))) fundsOnResult(d); });
+    }catch{}
+  }, 2500);
+}
+function finishFundsRun(){ if(FUND_RUN) FUND_RUN.done=true; clearInterval(FUND_POLL); $("fundsBtn").disabled=false; }
 // WS push: one transfer finished.
 function fundsOnResult(d){
   if(!FUND_RUN || d.runId!==FUND_RUN.id) return;
   if(d.total) FUND_RUN.total=d.total;
-  if(d.fatal){ FUND_RUN.fatal=d.error||"failed"; finishFundsRun(); renderFunds(); toast(FUND_RUN.fatal,"error"); return; }
+  if(d.fatal){ if(FUND_RUN.fatal) return; FUND_RUN.fatal=d.error||"failed"; finishFundsRun(); renderFunds(); toast(FUND_RUN.fatal,"error"); return; }
   if(!(d.index in FUND_RUN.byIndex)) FUND_RUN.order.push(d.index);
   FUND_RUN.byIndex[d.index]=d;
   if(FUND_RUN.total && FUND_RUN.order.length>=FUND_RUN.total) finishFundsRun();
@@ -1662,6 +1678,7 @@ async function checkUpdate(){
     if($("updVer")) $("updVer").textContent="v"+(r.current||"?");
     if(!r.configured){ if(st) st.textContent="set an update source first"; toast("Set a GitHub owner/repo, then Check","info"); return; }
     if(r.hasUpdate){ const safe=(r.url&&/^https:\/\//i.test(r.url))?escHtml(r.url):"#"; if(st) st.innerHTML=`<span style="color:var(--accent-text)">v${escHtml(r.latest)} available</span> · <a href="${safe}" target="_blank" rel="noopener">release</a>`; toast(`Update available: v${r.latest}`,"success"); }
+    else if(r.note){ if(st) st.textContent=r.note; toast(r.note,"info"); }
     else { if(st) st.textContent="up to date ✓"; toast("You're on the latest version","info"); }
   }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
 }
