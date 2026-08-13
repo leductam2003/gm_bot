@@ -857,10 +857,26 @@ async function bulkTask(action){
   let ok=0;
   if(action==="boost"){ // boost rebroadcasts pending tx — whole task
     for(const id of distinctTaskIds()){ try{ await api(`/tasks/${id}/boost`,{method:"POST"}); ok++; }catch{} }
-  }else{ // start/stop only the selected wallets (not the whole task)
-    for(const k of keys){ const [tid,wid]=k.split(":"); try{ await api(`/tasks/${tid}/${action}?wallet=${wid}`,{method:"POST"}); ok++; }catch{} }
+  }else{
+    // A task with ALL its rows selected starts/stops WHOLE-TASK: one call, and only the
+    // whole-task runner pre-arms (RunWallet never does — bird drop 2026-08-12: select-all
+    // → Start dispatched 200 per-wallet calls in a 3.3s awaited loop and silently
+    // bypassed the T-15s armed path). Partial selections stay per-wallet, but fire
+    // concurrently instead of serializing on localhost HTTP round-trips.
+    const byTask={};
+    for(const k of keys){ const [tid,wid]=k.split(":"); (byTask[tid]=byTask[tid]||[]).push(wid); }
+    const calls=[];
+    for(const tid of Object.keys(byTask)){
+      const total=LAST_TASK_KEYS.filter(k=>k.startsWith(tid+":")).length;
+      if(total && byTask[tid].length===total){
+        calls.push(api(`/tasks/${tid}/${action}`,{method:"POST"}).then(()=>{ok+=byTask[tid].length;}).catch(()=>{}));
+      }else{
+        for(const wid of byTask[tid]) calls.push(api(`/tasks/${tid}/${action}?wallet=${wid}`,{method:"POST"}).then(()=>{ok++;}).catch(()=>{}));
+      }
+    }
+    await Promise.all(calls);
   }
-  toast(ok?`${action} → ${n} wallet(s)`:`${action} failed`, ok?"success":"error");
+  toast(ok?`${action} → ${ok}/${n} wallet(s)`:`${action} failed`, ok?"success":"error");
 }
 async function bulkDeleteTasks(){
   const ids=distinctTaskIds(); if(!ids.length) return;
@@ -915,8 +931,9 @@ function pickGroup(g){ CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); }
 async function newGroup(){ const g=await promptDialog("New Group","Group name"); if(g){ TASK_GROUPS.add(g); saveGroups(); CUR_GROUP=g; TASK_SEL.clear(); renderTasks(); } }
 async function taskAction(id,action,walletId){ const q=walletId?`?wallet=${walletId}`:""; try{ await api(`/tasks/${id}/${action}${q}`,{method:"POST"}); if(action==="boost") toast("Boost — rebroadcasting pending tx with higher gas (same nonce)","info"); }catch(e){toast(e.message,"error");} }
 async function delTask(id){ if(await confirmDialog("Delete task?","Delete")){ await api("/tasks/"+id,{method:"DELETE"}); loadTasks(); toast("Task deleted","info"); } }
-async function startGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/start`,{method:"POST"}); }catch(e){toast(e.message,"error");} }
-async function stopGroup(){ try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/stop`,{method:"POST"}); }catch(e){toast(e.message,"error");} }
+// Start All / Stop All act on EVERY task of the current group — no selection needed.
+async function startGroup(){ const n=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).length; if(!n) return toast("No tasks in this group","info"); try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/start`,{method:"POST"}); toast(`Start all → ${n} task(s) in ${CUR_GROUP}`,"success"); }catch(e){toast(e.message,"error");} }
+async function stopGroup(){ const n=Object.values(TASKS).filter(t=>t.group===CUR_GROUP).length; if(!n) return toast("No tasks in this group","info"); try{ await api(`/tasks/group/${encodeURIComponent(CUR_GROUP)}/stop`,{method:"POST"}); toast(`Stop all → ${n} task(s) in ${CUR_GROUP}`,"info"); }catch(e){toast(e.message,"error");} }
 async function boostGroup(){ Object.values(TASKS).filter(t=>t.group===CUR_GROUP).forEach(t=>api(`/tasks/${t.id}/boost`,{method:"POST"}).catch(()=>{})); }
 
 // create / edit task modal

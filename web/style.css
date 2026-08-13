@@ -117,8 +117,8 @@ nav a.active::after { content: ""; margin-left: auto; width: 5px; height: 5px; b
 /* ---------- Cards / panels ---------- */
 .card { background: linear-gradient(180deg, rgba(255,255,255,.018), transparent); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px; }
 .card h2 { margin: 0 0 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .18em; color: var(--muted2); font-weight: 600; }
-.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.panel-head .title { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text); }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+.panel-head .title { display: flex; align-items: center; gap: 9px; font-weight: 600; color: var(--text); white-space: nowrap; }
 .panel-head .title .sub { color: var(--muted2); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .toolbtns { display: flex; gap: 8px; align-items: center; }
 
@@ -146,7 +146,7 @@ input, select, textarea { background: rgba(255,255,255,.025); color: var(--text)
 input:focus, select:focus, textarea:focus { border-color: var(--accent-glow); }
 input::placeholder, textarea::placeholder { color: var(--muted3); }
 button { background: rgba(255,255,255,.03); color: var(--text2); border: 1px solid var(--line2); border-radius: 8px; padding: 8px 14px;
-  font-size: 12.5px; font-family: var(--ui); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all .16s; }
+  font-size: 12.5px; font-family: var(--ui); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all .16s; white-space: nowrap; }
 button:hover { border-color: var(--accent-line); color: var(--text); }
 button.primary { background: linear-gradient(145deg, var(--accent), var(--accent-2)); color: #2a0d1c; border: none; font-weight: 600; box-shadow: 0 0 22px -10px var(--accent-glow); }
 button.primary:hover { filter: brightness(1.06); }
@@ -275,7 +275,12 @@ tbody tr.rowsel:hover { background: oklch(0.84 0.11 350 / .08); }
 .mintbox .fld { min-width: 0; }
 .mintbox select, .mintbox input { width: 100%; min-width: 0; }
 /* Multi-select action toolbar (tasks panel-head red-box) */
-.selbar { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 12px; border: 1px solid var(--accent-line); border-radius: 999px; background: oklch(0.84 0.11 350 / .06); animation: ovIn .14s ease; }
+/* Floating selection bar: pinned to the bottom of the viewport (shown only while rows
+   are selected), so it never squeezes the panel-head toolbar (Start All / Stop All). */
+.selbar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 70;
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px 7px 14px; border: 1px solid var(--accent-line); border-radius: 999px;
+  background: linear-gradient(oklch(0.84 0.11 350 / .08), oklch(0.84 0.11 350 / .08)), var(--panel2);
+  box-shadow: 0 14px 40px rgba(0,0,0,.55); animation: ovIn .14s ease; }
 .selbar .seln { font-size: 12px; color: var(--accent-text); margin-right: 2px; white-space: nowrap; }
 .selclear { font-size: 12px; color: var(--muted); cursor: pointer; padding-left: 2px; }
 .selclear:hover { color: var(--text); }
