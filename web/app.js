@@ -1502,7 +1502,18 @@ async function nftListConfirm(){
     } else {
       toast(`Listed ${r.listed||0}/${items.length}`,"success");
     }
-    setTimeout(nftLoad,2200);
+    // Optimistically mark the just-listed NFTs so the price shows on the card immediately —
+    // OpenSea's listings index lags several seconds, so a quick reload would still read them
+    // as unlisted. The reconcile reload below (long enough for the index to catch up) then
+    // confirms from OpenSea.
+    if(!r.needApproval && r.listed){
+      const priceOf={}; items.forEach(it=>priceOf[it.walletId+":"+it.tokenId]=Number(it.price)||0);
+      NFT_ITEMS.forEach(it=>{ const k=it.walletId+":"+it.tokenId; if(k in priceOf){ it.listed=true; it.listPrice=priceOf[k]; } });
+      nftRender();
+      setTimeout(nftLoad,15000); // reconcile once OpenSea has indexed the new listings
+    } else {
+      setTimeout(nftLoad,2500);
+    }
   }catch(e){ toast(e.message,"error"); }
 }
 async function nftCancel(){
