@@ -392,8 +392,8 @@ func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid contract address")
 		return
 	}
-	chainSlug, err := chains.SlugFromChainID(body.ChainID)
-	if err != nil {
+	chainSlug, ok := s.openSeaChainSlug(body.ChainID)
+	if !ok {
 		writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
 		return
 	}
@@ -576,8 +576,8 @@ func (s *Server) handleNftFloor(w http.ResponseWriter, r *http.Request) {
 	}
 	slug := strings.TrimSpace(body.Slug)
 	if slug == "" {
-		chainSlug, err := chains.SlugFromChainID(body.ChainID)
-		if err != nil {
+		chainSlug, ok := s.openSeaChainSlug(body.ChainID)
+		if !ok {
 			writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
 			return
 		}
@@ -615,8 +615,8 @@ func (s *Server) handleNftFees(w http.ResponseWriter, r *http.Request) {
 	}
 	slug := strings.TrimSpace(body.Slug)
 	if slug == "" {
-		chainSlug, err := chains.SlugFromChainID(body.ChainID)
-		if err != nil {
+		chainSlug, ok := s.openSeaChainSlug(body.ChainID)
+		if !ok {
 			writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
 			return
 		}
@@ -673,8 +673,8 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid contract")
 		return
 	}
-	chainSlug, err := chains.SlugFromChainID(body.ChainID)
-	if err != nil {
+	chainSlug, ok := s.openSeaChainSlug(body.ChainID)
+	if !ok {
 		writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
 		return
 	}
@@ -859,8 +859,8 @@ func (s *Server) handleNftAccept(w http.ResponseWriter, r *http.Request) {
 	if body.ChainID == 0 {
 		body.ChainID = 1
 	}
-	chainSlug, err := chains.SlugFromChainID(body.ChainID)
-	if err != nil {
+	chainSlug, ok := s.openSeaChainSlug(body.ChainID)
+	if !ok {
 		writeErr(w, http.StatusBadRequest, "chain not supported by OpenSea")
 		return
 	}
