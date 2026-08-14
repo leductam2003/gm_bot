@@ -1540,7 +1540,8 @@ function autoFloorStart(){
   const secs=Math.max(15,Math.floor(Number(($("autoFloorSecs")||{}).value)||30));
   AUTO_FLOOR={running:true,secs};
   autoFloorSetUI(true);
-  toast(`Auto-floor ON — repricing selected NFTs to floor every ${secs}s`,"success");
+  const off=Number(($("autoFloorOffset")||{}).value)||0;
+  toast(`Advanced listing ON — repricing selected NFTs to floor${off?(off>0?" +"+off:" "+off):""} every ${secs}s`,"success");
   const loop=async()=>{
     if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
     try{ await autoFloorCycle(); }catch(e){ if($("autoFloorStatus")) $("autoFloorStatus").textContent="· "+(e.message||"error"); }
@@ -1549,7 +1550,7 @@ function autoFloorStart(){
   loop(); // run one cycle now, then every `secs`
 }
 function autoFloorStop(){
-  if(AUTO_FLOOR){ AUTO_FLOOR.running=false; clearTimeout(AUTO_FLOOR.timer); AUTO_FLOOR=null; toast("Auto-floor stopped","info"); }
+  if(AUTO_FLOOR){ AUTO_FLOOR.running=false; clearTimeout(AUTO_FLOOR.timer); AUTO_FLOOR=null; toast("Advanced listing stopped","info"); }
   autoFloorSetUI(false);
 }
 const afStatus=(s)=>{ if($("autoFloorStatus")) $("autoFloorStatus").textContent=s; };
@@ -1561,9 +1562,15 @@ async function autoFloorCycle(){
   const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
   const floor=Number(f.floor)||0; if(f.slug) NFT_SLUG=f.slug; NFT_FLOOR=floor;
   if(!floor){ afStatus("· no floor listed yet"); return; }
-  // 2) selected NFTs listed ABOVE floor → need repricing
-  const above=sel.filter(it=>it.listed && Number(it.listPrice)>floor+1e-9);
-  if(!above.length){ afStatus(`· at floor ${floor} ${LIST_CUR} ✓`); return; }
+  // Target = floor + offset (e.g. -0.01 to undercut, +0.001 to sit above). Rounded to the
+  // currency's max precision so it's a valid listing price.
+  const offset=Number(($("autoFloorOffset")||{}).value)||0;
+  const target=Math.max(0,Number((floor+offset).toFixed(6)));
+  if(target<=0){ afStatus(`· floor ${floor} + offset ${offset} ≤ 0 — use a smaller offset`); return; }
+  const label=`${target} ${LIST_CUR} (floor ${floor}${offset?(offset>0?" +"+offset:" "+offset):""})`;
+  // 2) selected NFTs listed ABOVE target → need repricing
+  const above=sel.filter(it=>it.listed && Number(it.listPrice)>target+1e-9);
+  if(!above.length){ afStatus(`· at ${label} ✓`); return; }
   const wallets=new Set(above.map(it=>it.walletId));
   // 3) cancel the affected wallets (per-wallet incrementCounter)
   afStatus(`· cancelling ${wallets.size} wallet(s)…`);
@@ -1572,14 +1579,14 @@ async function autoFloorCycle(){
   await new Promise(r=>setTimeout(r,8000));
   if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
   // 5) re-list ALL selected+listed NFTs of the affected wallets at floor (the cancel cleared them all)
-  const relist=sel.filter(it=>wallets.has(it.walletId) && it.listed).map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(floor)}));
-  afStatus(`· re-listing ${relist.length} at floor ${floor} ${LIST_CUR}…`);
+  const relist=sel.filter(it=>wallets.has(it.walletId) && it.listed).map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(target)}));
+  afStatus(`· re-listing ${relist.length} at ${label}…`);
   const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:7*86400,items:relist})});
-  // optimistic: reflect the new floor price on the cards
+  // optimistic: reflect the new price on the cards
   const set=new Set(relist.map(it=>it.walletId+":"+it.tokenId));
-  NFT_ITEMS.forEach(it=>{ if(set.has(it.walletId+":"+it.tokenId)){ it.listed=true; it.listPrice=floor; } });
+  NFT_ITEMS.forEach(it=>{ if(set.has(it.walletId+":"+it.tokenId)){ it.listed=true; it.listPrice=target; } });
   nftRender();
-  afStatus(`· repriced ${r.listed||0}/${relist.length} to floor ${floor} ${LIST_CUR}`);
+  afStatus(`· repriced ${r.listed||0}/${relist.length} to ${label}`);
 }
 // Accept Offers → sells each selected NFT into the best active collection offer (paid in
 // WETH). Each accept is eth_call-simulated server-side before broadcast, so a doomed tx

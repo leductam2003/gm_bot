@@ -385,8 +385,9 @@
             <button class="sm" onclick="nftSelectAll()">Select all</button>
             <input id="nftSelNum" class="nselnum" placeholder="N" />
             <button class="sm" onclick="nftSelectN()">Select N</button>
-            <input id="autoFloorSecs" class="nselnum" value="30" title="Reprice interval (seconds)" style="width:46px" />
-            <button class="sm primary" id="autoFloorBtn" onclick="autoFloorStart()" title="Every N seconds, undercut the selected NFTs to the collection floor: if a listing is above floor, cancel that wallet's listings and re-list the selected NFTs at floor.">Auto-floor</button>
+            <input id="autoFloorSecs" class="nselnum" value="30" title="Reprice interval (seconds)" style="width:44px" />
+            <input id="autoFloorOffset" class="nselnum" value="0" placeholder="±floor" title="Offset vs floor — e.g. -0.01 (list below floor) or 0.001 (above floor). 0 = exactly floor." style="width:58px" />
+            <button class="sm primary" id="autoFloorBtn" onclick="autoFloorStart()" title="Every N seconds, reprice the selected NFTs to (floor + offset): if a listing is above that, cancel the wallet's listings and re-list its selected NFTs at floor+offset. Cancel is per-wallet, so non-selected listings on those wallets are cancelled too.">Advanced listing</button>
             <button class="sm danger" id="autoFloorStop" onclick="autoFloorStop()" style="display:none">Stop</button>
             <span class="muted" id="autoFloorStatus" style="font-size:11px"></span>
             <span class="muted" style="cursor:pointer;margin-left:auto" onclick="nftClearSel()">Clear</span>
