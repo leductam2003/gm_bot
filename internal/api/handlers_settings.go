@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -51,6 +52,113 @@ func (s *Server) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 		saved++
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"saved": saved})
+}
+
+// POST /api/opensea/genkeys {count} — generate N free OpenSea API keys via OpenSea's
+// keyless POST /auth/keys, APPEND them (deduped) to the saved OPENSEA_API_KEY, apply
+// live, and return the combined list. Free keys expire in ~7 days and are rate-limited,
+// so generating several lets the app rotate across them (e.g. a 200-wallet NFT fetch).
+func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Count int `json:"count"`
+	}
+	_ = decode(r, &body)
+	n := body.Count
+	if n < 1 {
+		n = 1
+	}
+	if n > 20 { // each key allows only 30 writes/hour — don't hammer the generator
+		n = 20
+	}
+	var added []string
+	lastErr := ""
+	for i := 0; i < n; i++ {
+		if r.Context().Err() != nil {
+			break
+		}
+		if i > 0 { // space out calls — the generator rate-limits bursts (429)
+			select {
+			case <-time.After(600 * time.Millisecond):
+			case <-r.Context().Done():
+			}
+		}
+		k, err := genOpenSeaKey(r.Context())
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		if k != "" {
+			added = append(added, k)
+		}
+	}
+	if len(added) == 0 {
+		writeErr(w, http.StatusBadGateway, "couldn't generate any key: "+lastErr)
+		return
+	}
+	// Merge with existing keys, dedup, preserve order.
+	seen := map[string]bool{}
+	var all []string
+	for _, k := range config.OpenSeaKeys() {
+		if !seen[k] {
+			seen[k] = true
+			all = append(all, k)
+		}
+	}
+	newCount := 0
+	for _, k := range added {
+		if !seen[k] {
+			seen[k] = true
+			all = append(all, k)
+			newCount++
+		}
+	}
+	joined := strings.Join(all, "\n")
+	if err := s.st.SetSetting("cfg.OPENSEA_API_KEY", joined); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = os.Setenv("OPENSEA_API_KEY", joined) // apply live (doRotating re-reads per request)
+	writeJSON(w, http.StatusOK, map[string]any{"added": newCount, "total": len(all), "keys": joined})
+}
+
+// genOpenSeaKey requests one free API key from OpenSea's keyless generator, retrying a
+// few times on 429 (the generator throttles bursts).
+func genOpenSeaKey(ctx context.Context) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt) * 1500 * time.Millisecond):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.opensea.io/api/v2/auth/keys", nil)
+		req.Header.Set("accept", "application/json")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		b, _ := io.ReadAll(resp.Body)
+		sc := resp.StatusCode
+		resp.Body.Close()
+		if sc == 429 {
+			lastErr = fmt.Errorf("rate limited (429) — try fewer keys")
+			continue
+		}
+		if sc >= 400 {
+			return "", fmt.Errorf("opensea %d", sc)
+		}
+		var out struct {
+			APIKey string `json:"api_key"`
+		}
+		if json.Unmarshal(b, &out) == nil && out.APIKey != "" {
+			return out.APIKey, nil
+		}
+		lastErr = fmt.Errorf("no api_key in response")
+	}
+	return "", lastErr
 }
 
 // GET /api/appsettings — the app config blob (Discord webhook, task defaults, etc.).

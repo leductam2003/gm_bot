@@ -1607,6 +1607,21 @@ async function saveApiKeys(){
   try{ await api("/settings",{method:"POST",body:JSON.stringify(body)}); toast("API keys saved & applied","success"); if($("setKeysStatus")) $("setKeysStatus").textContent="saved"; }
   catch(e){ toast(e.message,"error"); }
 }
+// Fetch N free OpenSea keys (server calls POST /auth/keys), append + save them, and show
+// the merged list. Free keys expire ~7 days & are rate-limited, so grab several to rotate.
+async function genOpenseaKeys(){
+  const n=Math.max(1,Math.min(20,Number(($("genKeyCount")||{}).value)||5));
+  const btn=event&&event.target, st=$("setKeysStatus");
+  if(btn){ btn.disabled=true; btn.textContent="Fetching…"; }
+  if(st) st.textContent=`fetching ${n} key(s)…`;
+  try{
+    const r=await api("/opensea/genkeys",{method:"POST",body:JSON.stringify({count:n})});
+    if($("setOpensea")) $("setOpensea").value=r.keys||"";
+    if(st) st.textContent=`+${r.added} added · ${r.total} total (saved & applied)`;
+    toast(`Fetched ${r.added} free OpenSea key(s) — ${r.total} total, live now`,"success");
+  }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="+ Fetch free keys"; } }
+}
 // ---- Settings sub-tabs + app config (Appearance / Discord / Task defaults) ----
 let APP_CFG = {};
 function goSub(sub){
