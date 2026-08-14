@@ -125,6 +125,7 @@ func (s *Server) Router(webDir string) http.Handler {
 		r.Post("/nft/fees", s.handleNftFees)
 		r.Post("/nft/list", s.handleNftList)
 		r.Post("/nft/cancel", s.handleNftCancel)
+		r.Post("/nft/owners", s.handleNftOwners) // on-chain ownerOf: which selected NFTs were sold/transferred
 		r.Post("/nft/accept", s.handleNftAccept)
 
 		// Logs

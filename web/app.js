@@ -1343,7 +1343,7 @@ function nftRender(){
   const items=nftView();
   $("nftCount").textContent = items.length===NFT_ITEMS.length ? `${NFT_ITEMS.length} NFTs` : `${items.length} / ${NFT_ITEMS.length} NFTs`;
   if(!items.length){ g.innerHTML=`<div class="muted" style="padding:20px">No NFTs match this filter.</div>`; nftUpdateBar(); return; }
-  const priceTag=it=> it.listed ? `<span class="badge listed">${it.listPrice? (Number(it.listPrice)+" "+LIST_CUR) : "LISTED"}</span>` : "";
+  const priceTag=it=> it.listed ? `<span class="badge listed">${it.listPrice? (Number(it.listPrice)+" "+escHtml(LIST_CUR)) : "LISTED"}</span>` : "";
   if(NFT_VIEW==="list"){
     g.innerHTML=items.map(it=>{
       const k=nftKey(it), sel=NFT_SEL.has(k);
@@ -1524,69 +1524,160 @@ async function nftCancel(){
     toast(`Cancelling ${r.cancelled||0} wallet(s)' listings on-chain — refresh in a moment`,"info"); setTimeout(nftLoad,3000);
   }catch(e){ toast(e.message,"error"); }
 }
-// ---- Auto-floor: keep the selected NFTs undercut to the collection floor ----
-// Every N seconds: fetch the floor; for selected NFTs listed ABOVE it, cancel those wallets
-// (incrementCounter) and re-list their selected NFTs at floor. Cancel is per-wallet, so any
-// non-selected listings on an affected wallet are cancelled too (that's what the tooltip warns).
+// ---- Advanced listing: auto-reprice the selected NFTs toward the collection floor ----
+// Config lives in the #advListModal panel (interval / offset / mode / min price). Every cycle:
+// fetch the floor; compute target = clamp(floor+offset, min); drop sold NFTs (on-chain ownerOf).
+// LOWERING a listing just posts a cheaper Seaport order (gasless, no cancel — buyers fill the lowest).
+// RAISING (match mode only) must invalidate the old cheaper order first via per-wallet incrementCounter,
+// which clears ALL of that wallet's listings, so they are all re-listed at target.
 let AUTO_FLOOR=null;
 function autoFloorSetUI(on){
+  // selbar: swap the "Advanced listing" opener for a running indicator (Stop + Settings + status)
   if($("autoFloorBtn")) $("autoFloorBtn").style.display = on?"none":"";
-  if($("autoFloorStop")) $("autoFloorStop").style.display = on?"":"none";
-  if(!on && $("autoFloorStatus")) $("autoFloorStatus").textContent="";
+  if($("autoFloorRun")) $("autoFloorRun").style.display = on?"inline-flex":"none";
+  // modal foot: swap Start ↔ Stop
+  if($("advListStartBtn")) $("advListStartBtn").style.display = on?"none":"";
+  if($("advListStopBtn")) $("advListStopBtn").style.display = on?"":"none";
+  if(!on){ if($("autoFloorStatus"))$("autoFloorStatus").textContent=""; if($("advListStatus"))$("advListStatus").textContent=""; }
+}
+// Open the Advanced-listing settings panel (interval / offset / mode / min price + Start/Stop).
+function advListOpen(){
+  if(!AUTO_FLOOR && !nftSelected().length) return toast("Select NFTs first","info"); // while running, always allow reopening to view status / adjust
+  advListInfo();
+  openModal("advListModal");
+}
+// Refresh the modal's live preview (selected/listed counts + floor→target) from current inputs.
+function advListInfo(){
+  const el=$("advListInfo"); if(!el) return;
+  const sel=nftSelected();
+  const listed=sel.filter(it=>it.listed).length;
+  const cur=escHtml(String(LIST_CUR||"ETH"));
+  if($("advListCount")) $("advListCount").textContent=sel.length+" selected";
+  if($("advListCur")) $("advListCur").textContent=LIST_CUR||"ETH";
+  const offset=Number(($("autoFloorOffset")||{}).value)||0;
+  const minP=Number(($("autoFloorMin")||{}).value)||0;
+  const floor=Number(NFT_FLOOR)||0;
+  let target=floor?Math.max(0,Number((floor+offset).toFixed(6))):0;
+  if(minP>0 && target<minP) target=minP;
+  el.innerHTML = `${sel.length} selected · ${listed} listed. `
+    + (floor ? `Floor <b>${floor} ${cur}</b> → target <b>${target} ${cur}</b>. ` : `Floor unknown — fetched when you Start. `)
+    + `Floor = cheapest listing from OTHER sellers (your own are ignored, so it never chases itself down). If nobody else is listing, it holds. `
+    + `Lowering just posts a cheaper listing (no cancel, no gas); raising cancels the wallet first (per-wallet — other listings on it are cleared too).`;
 }
 function autoFloorStart(){
   if(AUTO_FLOOR) return;
-  if(!nftSelected().length) return toast("Select NFTs first, then Auto-floor","info");
-  const secs=Math.max(15,Math.floor(Number(($("autoFloorSecs")||{}).value)||30));
-  AUTO_FLOOR={running:true,secs};
+  if(!nftSelected().length) return toast("Select NFTs first, then Advanced listing","info");
+  const secs=Math.max(1,Math.floor(Number(($("autoFloorSecs")||{}).value)||30));
+  if($("autoFloorSecs")) $("autoFloorSecs").value=secs; // reflect the clamped minimum
+  AUTO_FLOOR={running:true};
   autoFloorSetUI(true);
   const off=Number(($("autoFloorOffset")||{}).value)||0;
-  toast(`Advanced listing ON — repricing selected NFTs to floor${off?(off>0?" +"+off:" "+off):""} every ${secs}s`,"success");
+  const mode=($("autoFloorMode")||{}).value||"down";
+  toast(`Advanced listing ON — ${mode==="match"?"matching":"following"} floor${off?(off>0?" +"+off:" "+off):""} every ${secs}s`,"success");
   const loop=async()=>{
     if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
-    try{ await autoFloorCycle(); }catch(e){ if($("autoFloorStatus")) $("autoFloorStatus").textContent="· "+(e.message||"error"); }
-    if(AUTO_FLOOR&&AUTO_FLOOR.running) AUTO_FLOOR.timer=setTimeout(loop, AUTO_FLOOR.secs*1000);
+    try{ await autoFloorCycle(); }catch(e){ afStatus("· "+(e.message||"error")); }
+    if(AUTO_FLOOR&&AUTO_FLOOR.running){
+      const s=Math.max(1,Math.floor(Number(($("autoFloorSecs")||{}).value)||30)); // live interval — changing it in the modal applies next cycle
+      AUTO_FLOOR.timer=setTimeout(loop, s*1000);
+    }
   };
-  loop(); // run one cycle now, then every `secs`
+  loop(); // run one cycle now, then on the interval
 }
 function autoFloorStop(){
   if(AUTO_FLOOR){ AUTO_FLOOR.running=false; clearTimeout(AUTO_FLOOR.timer); AUTO_FLOOR=null; toast("Advanced listing stopped","info"); }
   autoFloorSetUI(false);
 }
-const afStatus=(s)=>{ if($("autoFloorStatus")) $("autoFloorStatus").textContent=s; };
+const afStatus=(s)=>{ if($("autoFloorStatus")) $("autoFloorStatus").textContent=s; if($("advListStatus")) $("advListStatus").textContent=s; };
+// heartbeat suffix so idle "on-target" cycles still visibly tick (proves the interval is firing)
+const afTick=()=> AUTO_FLOOR ? ` · #${AUTO_FLOOR.checks||0} ${new Date().toTimeString().slice(0,8)}` : "";
 async function autoFloorCycle(){
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   const sel=nftSelected(); if(!sel.length){ afStatus("· no NFTs selected"); return; }
-  // 1) current floor (in the collection currency)
+  if(AUTO_FLOOR) AUTO_FLOOR.checks=(AUTO_FLOOR.checks||0)+1; // heartbeat count
+  // 1) reference floor = cheapest listing from OTHER sellers (excludeMine), read from LIVE listings —
+  //    so we never chase our own listings into a downward spiral, and we react on the set interval
+  //    (not gated by the laggy /stats floor).
   afStatus("· checking floor…");
-  const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
-  const floor=Number(f.floor)||0; if(f.slug) NFT_SLUG=f.slug; NFT_FLOOR=floor;
-  if(!floor){ afStatus("· no floor listed yet"); return; }
-  // Target = floor + offset (e.g. -0.01 to undercut, +0.001 to sit above). Rounded to the
-  // currency's max precision so it's a valid listing price.
+  const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG,excludeMine:true})});
+  const floor=Number(f.floor)||0; if(f.slug) NFT_SLUG=f.slug; NFT_FLOOR=floor; if(f.cur) LIST_CUR=f.cur;
+  if(!floor){ afStatus(`· no other sellers listing — holding${afTick()}`); return; } // nothing to undercut; don't spiral against ourselves
+  // Target = floor + offset (e.g. -0.01 to undercut, +0.001 to sit above), then clamped up to
+  // the min-price guard. Rounded to the currency's max precision so it's a valid listing price.
   const offset=Number(($("autoFloorOffset")||{}).value)||0;
-  const target=Math.max(0,Number((floor+offset).toFixed(6)));
+  const minP=Number(($("autoFloorMin")||{}).value)||0;
+  const mode=($("autoFloorMode")||{}).value||"down";
+  let target=Math.max(0,Number((floor+offset).toFixed(6)));
+  const clamped = minP>0 && target<minP;
+  if(clamped) target=Number(minP.toFixed(6));
   if(target<=0){ afStatus(`· floor ${floor} + offset ${offset} ≤ 0 — use a smaller offset`); return; }
-  const label=`${target} ${LIST_CUR} (floor ${floor}${offset?(offset>0?" +"+offset:" "+offset):""})`;
-  // 2) selected NFTs listed ABOVE target → need repricing
-  const above=sel.filter(it=>it.listed && Number(it.listPrice)>target+1e-9);
-  if(!above.length){ afStatus(`· at ${label} ✓`); return; }
-  const wallets=new Set(above.map(it=>it.walletId));
-  // 3) cancel the affected wallets (per-wallet incrementCounter)
-  afStatus(`· cancelling ${wallets.size} wallet(s)…`);
-  await api("/nft/cancel",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:above.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
-  // 4) wait for the cancels to mine (Robinhood blocks are fast) before re-listing under the new counter
-  await new Promise(r=>setTimeout(r,8000));
-  if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
-  // 5) re-list ALL selected+listed NFTs of the affected wallets at floor (the cancel cleared them all)
-  const relist=sel.filter(it=>wallets.has(it.walletId) && it.listed).map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(target)}));
-  afStatus(`· re-listing ${relist.length} at ${label}…`);
-  const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:7*86400,items:relist})});
-  // optimistic: reflect the new price on the cards
-  const set=new Set(relist.map(it=>it.walletId+":"+it.tokenId));
-  NFT_ITEMS.forEach(it=>{ if(set.has(it.walletId+":"+it.tokenId)){ it.listed=true; it.listPrice=target; } });
+  const label=`${target} ${LIST_CUR} (floor ${floor}${offset?(offset>0?" +"+offset:" "+offset):""}${clamped?", min":""})`;
+  // 2) selected NFTs whose listing is OFF-target and needs repricing.
+  //    mode "down"  → only listings ABOVE target (follow the floor down, never raise).
+  //    mode "match" → any listing not equal to target (raise & lower to sit exactly at target).
+  let offTarget = mode==="match"
+    ? sel.filter(it=>it.listed && Math.abs(Number(it.listPrice)-target)>1e-9)
+    : sel.filter(it=>it.listed && Number(it.listPrice)>target+1e-9);
+  if(!offTarget.length){ afStatus(`· at ${label} ✓${afTick()}`); return; }
+  let wallets=new Set(offTarget.map(it=>it.walletId));
+  // 2b) drop NFTs that were SOLD/transferred out (on-chain ownerOf) — otherwise we'd waste a
+  // cancel + a doomed re-list on a token the wallet no longer owns, every cycle. Check all
+  // selected+listed of the affected wallets (the same set we'd re-list).
+  const candidates=sel.filter(it=>wallets.has(it.walletId) && it.listed);
+  try{
+    afStatus("· checking ownership…");
+    const chk=await api("/nft/owners",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:candidates.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
+    const soldSet=new Set((chk.sold||[]).map(s=>s.walletId+":"+s.tokenId));
+    if(soldSet.size){
+      NFT_ITEMS.forEach(it=>{ if(soldSet.has(nftKey(it))){ it.listed=false; it.listPrice=0; NFT_SEL.delete(nftKey(it)); } });
+      nftRender();
+      afStatus(`· ${soldSet.size} sold — dropped`);
+      offTarget=offTarget.filter(it=>!soldSet.has(nftKey(it)));
+      if(!offTarget.length){ afStatus(`· sold — nothing off ${label} now`); return; }
+    }
+  }catch(e){ /* uncertain ownership → proceed; a doomed re-list just no-ops */ }
+  if(!AUTO_FLOOR||!AUTO_FLOOR.running) return; // last abort point — nothing has been broadcast/posted yet
+  // 3) LOWERING needs no cancel: a new, cheaper Seaport order simply supersedes the old one (buyers
+  //    always fill the lowest live order), so we just post it — gasless, instant, no wait, and it never
+  //    touches other NFTs in the wallet. RAISING is different: the old CHEAPER order must be invalidated
+  //    first or a buyer fills it at the low price. The only on-chain cancel we have is per-wallet
+  //    incrementCounter, so a raise cancels the whole wallet then re-lists everything at target.
+  //    "down" mode only ever lowers → it never cancels. Raises only happen in "match" mode.
+  const toRaise = offTarget.filter(it=>Number(it.listPrice) < target - 1e-9);
+  const raiseWallets = new Set(toRaise.map(it=>it.walletId));
+  const helpers=[];
+  let listed=0, attempted=0;
+  const mark=(items)=>{ const k=new Set(items.map(it=>it.walletId+":"+it.tokenId)); NFT_ITEMS.forEach(it=>{ if(k.has(nftKey(it))){ it.listed=true; it.listPrice=target; } }); };
+
+  // 3a) RAISE path (match mode) — per-wallet cancel, wait, then re-list every still-owned selected+listed
+  //     NFT of those wallets at target (all should sit at target in match mode; siblings ride along).
+  if(raiseWallets.size){
+    afStatus(`· cancelling ${raiseWallets.size} wallet(s) to raise…`);
+    await api("/nft/cancel",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:toRaise.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
+    // ponytail: fixed 8s wait for the incrementCounter to mine before re-listing under the new counter.
+    // Upgrade path: poll the wallet's Seaport counter until it advances. Do NOT abort on Stop here — the
+    // cancel is already broadcast, so we must finish the re-list or those wallets are left delisted.
+    await new Promise(r=>setTimeout(r,8000));
+    const relist = nftSelected().filter(it=>raiseWallets.has(it.walletId) && it.listed)
+      .map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(target)}));
+    afStatus(`· re-listing ${relist.length} at ${label}…`);
+    const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:7*86400,items:relist})});
+    listed+=Number(r.listed||0); attempted+=relist.length; mark(relist);
+  }
+
+  // 3b) LOWER path (no cancel) — post the cheaper listing for items ABOVE target that aren't in a wallet
+  //     already re-listed by the raise path.
+  const lower = offTarget.filter(it=>Number(it.listPrice) > target + 1e-9 && !raiseWallets.has(it.walletId))
+    .map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(target)}));
+  if(lower.length){
+    afStatus(`· lowering ${lower.length} to ${label}…`);
+    const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:7*86400,items:lower})});
+    listed+=Number(r.listed||0); attempted+=lower.length; mark(lower);
+  }
+
   nftRender();
-  afStatus(`· repriced ${r.listed||0}/${relist.length} to ${label}`);
+  afStatus(listed<attempted ? `· repriced ${listed}/${attempted} to ${label} — ${attempted-listed} may have failed, reload to verify${afTick()}`
+                            : `· repriced ${listed}/${attempted} to ${label}${afTick()}`);
 }
 // Accept Offers → sells each selected NFT into the best active collection offer (paid in
 // WETH). Each accept is eth_call-simulated server-side before broadcast, so a doomed tx

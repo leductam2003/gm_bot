@@ -385,11 +385,13 @@
             <button class="sm" onclick="nftSelectAll()">Select all</button>
             <input id="nftSelNum" class="nselnum" placeholder="N" />
             <button class="sm" onclick="nftSelectN()">Select N</button>
-            <input id="autoFloorSecs" class="nselnum" value="30" title="Reprice interval (seconds)" style="width:44px" />
-            <input id="autoFloorOffset" class="nselnum" value="0" placeholder="±floor" title="Offset vs floor — e.g. -0.01 (list below floor) or 0.001 (above floor). 0 = exactly floor." style="width:58px" />
-            <button class="sm primary" id="autoFloorBtn" onclick="autoFloorStart()" title="Every N seconds, reprice the selected NFTs to (floor + offset): if a listing is above that, cancel the wallet's listings and re-list its selected NFTs at floor+offset. Cancel is per-wallet, so non-selected listings on those wallets are cancelled too.">Advanced listing</button>
-            <button class="sm danger" id="autoFloorStop" onclick="autoFloorStop()" style="display:none">Stop</button>
-            <span class="muted" id="autoFloorStatus" style="font-size:11px"></span>
+            <button class="sm primary" id="autoFloorBtn" onclick="advListOpen()" title="Auto-reprice the selected NFTs toward the collection floor on a timer. Opens a settings panel: interval, offset, mode, min price.">Advanced listing</button>
+            <span id="autoFloorRun" style="display:none;align-items:center;gap:8px">
+              <span style="color:#39d98a" title="Advanced listing is running">&#9679;</span>
+              <button class="sm danger" onclick="autoFloorStop()">Stop</button>
+              <button class="sm" onclick="advListOpen()">Settings</button>
+              <span class="muted" id="autoFloorStatus" style="font-size:11px"></span>
+            </span>
             <span class="muted" style="cursor:pointer;margin-left:auto" onclick="nftClearSel()">Clear</span>
           </div>
           <div class="nft-grid cardview" id="nftGrid"></div>
@@ -438,6 +440,33 @@
       <span class="muted" style="margin-right:auto">Expiration <select id="listDuration"><option value="1">1 Day</option><option value="7" selected>7 Days</option><option value="30">30 Days</option><option value="90">90 Days</option></select></span>
       <button onclick="closeModal('listModal')">Close</button>
       <button class="primary" onclick="nftListConfirm()">Create Listings</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Advanced listing modal ===== -->
+<div class="overlay" id="advListModal">
+  <div class="modal" style="width:500px;max-width:94vw">
+    <div class="mhead"><div><h3>Advanced listing</h3><div class="muted" id="advListCount">0 selected</div></div><span class="close" onclick="closeModal('advListModal')">&times;</span></div>
+    <div class="mbody">
+      <div style="display:flex;gap:12px">
+        <label class="fld" style="flex:1">Interval (sec, min 1)<input id="autoFloorSecs" type="number" min="1" value="30" oninput="advListInfo()" /></label>
+        <label class="fld" style="flex:1"><span>Offset (<span id="advListCur">ETH</span>)</span><input id="autoFloorOffset" type="number" step="0.0001" value="0" placeholder="± vs floor" title="Offset vs floor — e.g. -0.01 (below floor), 0.001 (above), 0 (exactly floor)." oninput="advListInfo()" /></label>
+      </div>
+      <label class="fld" style="margin-top:12px">Repricing mode
+        <select id="autoFloorMode" onchange="advListInfo()">
+          <option value="down">Follow floor down — only lower (never raise)</option>
+          <option value="match">Always match floor — raise &amp; lower to floor+offset</option>
+        </select>
+      </label>
+      <label class="fld" style="margin-top:12px">Min price — never list below (0 = no limit)<input id="autoFloorMin" type="number" step="0.0001" min="0" value="0" oninput="advListInfo()" /></label>
+      <div class="warnbox" id="advListInfo" style="margin-top:12px">Select NFTs, set the target, then Start.</div>
+    </div>
+    <div class="mfoot">
+      <span class="muted" id="advListStatus" style="margin-right:auto;font-size:12px"></span>
+      <button onclick="closeModal('advListModal')">Close</button>
+      <button class="danger" id="advListStopBtn" onclick="autoFloorStop()" style="display:none">Stop</button>
+      <button class="primary" id="advListStartBtn" onclick="autoFloorStart()">Start</button>
     </div>
   </div>
 </div>

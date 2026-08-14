@@ -596,6 +596,7 @@ func (s *Server) handleNftFloor(w http.ResponseWriter, r *http.Request) {
 		ChainID         int    `json:"chainId"`
 		ContractAddress string `json:"contractAddress"`
 		Slug            string `json:"slug"`
+		ExcludeMine     bool   `json:"excludeMine"` // repricer: floor set by OTHER sellers (ignore my own wallets)
 	}
 	if err := decode(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
@@ -617,6 +618,24 @@ func (s *Server) handleNftFloor(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "couldn't resolve the collection")
 			return
 		}
+	}
+	// Repricer path: use the cheapest listing from OTHER sellers (excluding all my wallets) so the
+	// bot never chases its own listings into a downward spiral. cur = the listing currency; mine=true
+	// tells the client this is the competitor floor (0 = no other sellers → the client should hold).
+	if body.ExcludeMine {
+		exclude := map[string]bool{}
+		if rows, err := s.st.ListWallets(); err == nil {
+			for _, wl := range rows {
+				exclude[strings.ToLower(wl.Address)] = true
+			}
+		}
+		floor, cur, err := s.osc.FloorExcluding(r.Context(), slug, body.ContractAddress, exclude)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "floor: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"floor": floor, "slug": slug, "cur": cur, "mine": true})
+		return
 	}
 	floor, err := s.osc.Floor(r.Context(), slug)
 	if err != nil {
@@ -863,6 +882,74 @@ func (s *Server) handleNftCancel(w http.ResponseWriter, r *http.Request) {
 		"cancelled": created,
 		"note":      "running incrementCounter per wallet — cancels ALL that wallet's open Seaport listings on-chain",
 	})
+}
+
+// POST /api/nft/owners {chainId, contractAddress, items:[{walletId,tokenId}]} — returns the
+// items NO LONGER owned by their wallet (sold or transferred), read on-chain via ownerOf so
+// the auto-repricer can drop them. On-chain only (no OpenSea key). On an RPC error an item
+// is treated as still-owned, so a blip never wrongly drops a live listing.
+func (s *Server) handleNftOwners(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChainID         int    `json:"chainId"`
+		ContractAddress string `json:"contractAddress"`
+		Items           []struct {
+			WalletID int64  `json:"walletId"`
+			TokenID  string `json:"tokenId"`
+		} `json:"items"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if !common.IsHexAddress(body.ContractAddress) {
+		writeErr(w, http.StatusBadRequest, "invalid contract")
+		return
+	}
+	client, err := s.clientForChain(r, body.ChainID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	contract := common.HexToAddress(body.ContractAddress)
+	rows, _ := s.st.ListWallets()
+	addrByID := map[int64]string{}
+	for _, wl := range rows {
+		addrByID[wl.ID] = wl.Address
+	}
+	type oi struct {
+		WalletID int64  `json:"walletId"`
+		TokenID  string `json:"tokenId"`
+	}
+	var mu sync.Mutex
+	sold := []oi{}
+	sem := make(chan struct{}, 20)
+	var wg sync.WaitGroup
+	for _, it := range body.Items {
+		wg.Add(1)
+		go func(walletID int64, tokenID string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			addr := addrByID[walletID]
+			tid, ok := new(big.Int).SetString(strings.TrimSpace(tokenID), 10)
+			if !ok || addr == "" {
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second) // bound each RPC so a half-stalled node can't freeze the repricer
+			owner, err := evm.OwnerOf(ctx, client, contract, tid)
+			cancel()
+			if err != nil {
+				return // uncertain → keep it (never drop a live listing on an RPC blip)
+			}
+			if !strings.EqualFold(owner.Hex(), addr) {
+				mu.Lock()
+				sold = append(sold, oi{walletID, tokenID})
+				mu.Unlock()
+			}
+		}(it.WalletID, it.TokenID)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"sold": sold})
 }
 
 // acceptResult is one streamed accept-offer outcome (WS "accept" event).

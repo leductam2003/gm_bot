@@ -30,6 +30,7 @@ var (
 func init() {
 	erc721ABI = mustABI(`[
 		{"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"owner","type":"address"}],"outputs":[{"type":"uint256"}]},
+		{"type":"function","name":"ownerOf","stateMutability":"view","inputs":[{"name":"tokenId","type":"uint256"}],"outputs":[{"type":"address"}]},
 		{"type":"function","name":"name","stateMutability":"view","inputs":[],"outputs":[{"type":"string"}]}
 	]`)
 	seaDropABI = mustABI(`[
@@ -81,6 +82,22 @@ func BalanceOf(ctx context.Context, c *ethclient.Client, contract, owner common.
 		return nil, fmt.Errorf("unexpected balanceOf type")
 	}
 	return n, nil
+}
+
+// OwnerOf returns the current owner of a token (for detecting a sale/transfer).
+func OwnerOf(ctx context.Context, c *ethclient.Client, contract common.Address, tokenID *big.Int) (common.Address, error) {
+	vals, err := callView(ctx, c, contract, erc721ABI, "ownerOf", tokenID)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(vals) == 0 {
+		return common.Address{}, fmt.Errorf("empty ownerOf result")
+	}
+	a, ok := vals[0].(common.Address)
+	if !ok {
+		return common.Address{}, fmt.Errorf("unexpected ownerOf type")
+	}
+	return a, nil
 }
 
 // CollectionName returns the collection's name() (best-effort).

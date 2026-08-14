@@ -570,6 +570,77 @@ func (c *Client) MakerListings(ctx context.Context, chain, slug, maker, contract
 	return out, cur
 }
 
+// FloorExcluding returns the cheapest active listing for the collection whose offerer is NOT in
+// `exclude` (a set of lowercased addresses) — i.e. the floor set by OTHER sellers. The auto-repricer
+// uses this instead of the collection floor so it prices against competitors rather than chasing its
+// own listings down to zero. Reads live listings (not the laggy /stats floor), so it reacts promptly.
+// Returns (0, cur, nil) when nobody else is listing — the caller should then HOLD, not undercut itself.
+func (c *Client) FloorExcluding(ctx context.Context, slug, contract string, exclude map[string]bool) (float64, string, error) {
+	if slug == "" {
+		return 0, "", fmt.Errorf("no slug")
+	}
+	lc := strings.ToLower(contract)
+	best := 0.0
+	cur := ""
+	next := ""
+	for page := 0; page < 6; page++ {
+		q := url.Values{}
+		q.Set("limit", "100")
+		if next != "" {
+			q.Set("next", next)
+		}
+		body, _, err := c.get(ctx, fmt.Sprintf("/listings/collection/%s/all?%s", slug, q.Encode()))
+		if err != nil {
+			return 0, cur, err
+		}
+		var r struct {
+			Listings []struct {
+				ProtocolData struct {
+					Parameters struct {
+						Offerer string `json:"offerer"`
+						Offer   []struct {
+							Token string `json:"token"`
+						} `json:"offer"`
+					} `json:"parameters"`
+				} `json:"protocol_data"`
+				Price struct {
+					Current struct {
+						Currency string `json:"currency"`
+						Decimals int    `json:"decimals"`
+						Value    string `json:"value"`
+					} `json:"current"`
+				} `json:"price"`
+			} `json:"listings"`
+			Next string `json:"next"`
+		}
+		if err := json.Unmarshal(body, &r); err != nil {
+			return 0, cur, err
+		}
+		for _, l := range r.Listings {
+			if exclude[strings.ToLower(l.ProtocolData.Parameters.Offerer)] {
+				continue // my own listing — ignore so we never undercut ourselves
+			}
+			price := listingPrice(l.Price.Current.Value, l.Price.Current.Decimals)
+			if price <= 0 {
+				continue
+			}
+			for _, o := range l.ProtocolData.Parameters.Offer {
+				if strings.ToLower(o.Token) == lc {
+					if best == 0 || price < best {
+						best = price
+						cur = l.Price.Current.Currency
+					}
+				}
+			}
+		}
+		next = r.Next
+		if next == "" {
+			break
+		}
+	}
+	return best, cur, nil
+}
+
 // listingPrice converts an OpenSea base-unit price string to a human float using decimals.
 func listingPrice(value string, decimals int) float64 {
 	v, err := strconv.ParseFloat(value, 64)
