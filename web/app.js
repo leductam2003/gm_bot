@@ -1280,6 +1280,7 @@ async function loadNftProxies(){
 }
 let NFT_RUN = null, _nftRenderT = null;
 async function nftLoad(){
+  if(typeof AUTO_FLOOR!=="undefined" && AUTO_FLOOR) autoFloorStop(); // a reload clears the selection the repricer runs on
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
   if(!contract) return toast("Enter a contract address","error");
   const ids = nftWS ? nftWS.selected() : [];
@@ -1522,6 +1523,63 @@ async function nftCancel(){
     const r=await api("/nft/cancel",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:sel.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
     toast(`Cancelling ${r.cancelled||0} wallet(s)' listings on-chain — refresh in a moment`,"info"); setTimeout(nftLoad,3000);
   }catch(e){ toast(e.message,"error"); }
+}
+// ---- Auto-floor: keep the selected NFTs undercut to the collection floor ----
+// Every N seconds: fetch the floor; for selected NFTs listed ABOVE it, cancel those wallets
+// (incrementCounter) and re-list their selected NFTs at floor. Cancel is per-wallet, so any
+// non-selected listings on an affected wallet are cancelled too (that's what the tooltip warns).
+let AUTO_FLOOR=null;
+function autoFloorSetUI(on){
+  if($("autoFloorBtn")) $("autoFloorBtn").style.display = on?"none":"";
+  if($("autoFloorStop")) $("autoFloorStop").style.display = on?"":"none";
+  if(!on && $("autoFloorStatus")) $("autoFloorStatus").textContent="";
+}
+function autoFloorStart(){
+  if(AUTO_FLOOR) return;
+  if(!nftSelected().length) return toast("Select NFTs first, then Auto-floor","info");
+  const secs=Math.max(15,Math.floor(Number(($("autoFloorSecs")||{}).value)||30));
+  AUTO_FLOOR={running:true,secs};
+  autoFloorSetUI(true);
+  toast(`Auto-floor ON — repricing selected NFTs to floor every ${secs}s`,"success");
+  const loop=async()=>{
+    if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
+    try{ await autoFloorCycle(); }catch(e){ if($("autoFloorStatus")) $("autoFloorStatus").textContent="· "+(e.message||"error"); }
+    if(AUTO_FLOOR&&AUTO_FLOOR.running) AUTO_FLOOR.timer=setTimeout(loop, AUTO_FLOOR.secs*1000);
+  };
+  loop(); // run one cycle now, then every `secs`
+}
+function autoFloorStop(){
+  if(AUTO_FLOOR){ AUTO_FLOOR.running=false; clearTimeout(AUTO_FLOOR.timer); AUTO_FLOOR=null; toast("Auto-floor stopped","info"); }
+  autoFloorSetUI(false);
+}
+const afStatus=(s)=>{ if($("autoFloorStatus")) $("autoFloorStatus").textContent=s; };
+async function autoFloorCycle(){
+  const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);
+  const sel=nftSelected(); if(!sel.length){ afStatus("· no NFTs selected"); return; }
+  // 1) current floor (in the collection currency)
+  afStatus("· checking floor…");
+  const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
+  const floor=Number(f.floor)||0; if(f.slug) NFT_SLUG=f.slug; NFT_FLOOR=floor;
+  if(!floor){ afStatus("· no floor listed yet"); return; }
+  // 2) selected NFTs listed ABOVE floor → need repricing
+  const above=sel.filter(it=>it.listed && Number(it.listPrice)>floor+1e-9);
+  if(!above.length){ afStatus(`· at floor ${floor} ${LIST_CUR} ✓`); return; }
+  const wallets=new Set(above.map(it=>it.walletId));
+  // 3) cancel the affected wallets (per-wallet incrementCounter)
+  afStatus(`· cancelling ${wallets.size} wallet(s)…`);
+  await api("/nft/cancel",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,items:above.map(it=>({walletId:it.walletId,tokenId:it.tokenId}))})});
+  // 4) wait for the cancels to mine (Robinhood blocks are fast) before re-listing under the new counter
+  await new Promise(r=>setTimeout(r,8000));
+  if(!AUTO_FLOOR||!AUTO_FLOOR.running) return;
+  // 5) re-list ALL selected+listed NFTs of the affected wallets at floor (the cancel cleared them all)
+  const relist=sel.filter(it=>wallets.has(it.walletId) && it.listed).map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(floor)}));
+  afStatus(`· re-listing ${relist.length} at floor ${floor} ${LIST_CUR}…`);
+  const r=await api("/nft/list",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,durationSec:7*86400,items:relist})});
+  // optimistic: reflect the new floor price on the cards
+  const set=new Set(relist.map(it=>it.walletId+":"+it.tokenId));
+  NFT_ITEMS.forEach(it=>{ if(set.has(it.walletId+":"+it.tokenId)){ it.listed=true; it.listPrice=floor; } });
+  nftRender();
+  afStatus(`· repriced ${r.listed||0}/${relist.length} to floor ${floor} ${LIST_CUR}`);
 }
 // Accept Offers → sells each selected NFT into the best active collection offer (paid in
 // WETH). Each accept is eth_call-simulated server-side before broadcast, so a doomed tx

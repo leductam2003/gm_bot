@@ -385,6 +385,10 @@
             <button class="sm" onclick="nftSelectAll()">Select all</button>
             <input id="nftSelNum" class="nselnum" placeholder="N" />
             <button class="sm" onclick="nftSelectN()">Select N</button>
+            <input id="autoFloorSecs" class="nselnum" value="30" title="Reprice interval (seconds)" style="width:46px" />
+            <button class="sm primary" id="autoFloorBtn" onclick="autoFloorStart()" title="Every N seconds, undercut the selected NFTs to the collection floor: if a listing is above floor, cancel that wallet's listings and re-list the selected NFTs at floor.">Auto-floor</button>
+            <button class="sm danger" id="autoFloorStop" onclick="autoFloorStop()" style="display:none">Stop</button>
+            <span class="muted" id="autoFloorStatus" style="font-size:11px"></span>
             <span class="muted" style="cursor:pointer;margin-left:auto" onclick="nftClearSel()">Clear</span>
           </div>
           <div class="nft-grid cardview" id="nftGrid"></div>
