@@ -767,12 +767,13 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 			keepErr("wallet " + err.Error())
 			continue
 		}
-		approved, _ := evm.IsApprovedForConduit(r.Context(), client, contract, owner)
+		approved, _ := evm.IsApprovedForConduit(r.Context(), client, contract, owner, body.ChainID)
 		if !approved {
+			_, conduit := evm.ConduitFor(body.ChainID)
 			id, _ := s.eng.Create(engine.TaskConfig{
 				Group: "NFT-Approve", ChainID: body.ChainID, ContractAddress: contract.Hex(),
 				Mode: engine.ModeAction, FunctionSig: "setApprovalForAll(address,bool)",
-				Params: []string{evm.OSConduit, "true"}, Gas: autoGas(), WalletIDs: []int64{walletID},
+				Params: []string{conduit, "true"}, Gas: autoGas(), WalletIDs: []int64{walletID},
 			})
 			if id != 0 {
 				approveTasks = append(approveTasks, id)
@@ -953,11 +954,12 @@ func (s *Server) handleNftAccept(w http.ResponseWriter, r *http.Request) {
 				res.From = owner.Hex()
 
 				// One-time conduit approval (the NFT moves through the OpenSea conduit).
-				if approved, _ := evm.IsApprovedForConduit(ctx, client, contract, owner); !approved {
+				if approved, _ := evm.IsApprovedForConduit(ctx, client, contract, owner, body.ChainID); !approved {
+					_, conduit := evm.ConduitFor(body.ChainID)
 					id, _ := s.eng.Create(engine.TaskConfig{
 						Group: "NFT-Approve", ChainID: body.ChainID, ContractAddress: contract.Hex(),
 						Mode: engine.ModeAction, FunctionSig: "setApprovalForAll(address,bool)",
-						Params: []string{evm.OSConduit, "true"}, Gas: autoGas(), WalletIDs: []int64{it.WalletID},
+						Params: []string{conduit, "true"}, Gas: autoGas(), WalletIDs: []int64{it.WalletID},
 					})
 					if id != 0 {
 						_ = s.eng.Start(id)

@@ -17,11 +17,24 @@ import (
 
 // Seaport 1.6 + OpenSea conduit constants (verbatim from zyper-mac/src/listing.ts).
 const (
-	Seaport16     = "0x0000000000000068F116a894984e2DB1123eB395"
-	OSConduitKey  = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
-	OSConduit     = "0x1E0049783F008A0085193E00003D00cd54003c71"
-	zeroBytes32   = "0x0000000000000000000000000000000000000000000000000000000000000000"
+	Seaport16    = "0x0000000000000068F116a894984e2DB1123eB395"
+	OSConduitKey = "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000"
+	OSConduit    = "0x1E0049783F008A0085193E00003D00cd54003c71"
+	zeroBytes32  = "0x0000000000000000000000000000000000000000000000000000000000000000"
 )
+
+// ConduitFor returns the OpenSea conduit key (goes in the Seaport order) and conduit
+// address (the operator the NFT must be approved to) for a chain. Most chains use the
+// canonical OpenSea conduit; Robinhood (4663) runs a DIFFERENT OpenSea conduit deployment
+// — its listing validation rejects the canonical key — resolved on-chain from the Seaport
+// ConduitController's NewConduit event.
+func ConduitFor(chainID int) (key, addr string) {
+	if chainID == 4663 { // Robinhood Chain
+		return "0x61159fefdfada89302ed55f8b9e89e2d67d8258712b3a3f89aa88525877f1d5e",
+			"0x963f00d3ff000064ffcba824b800c0000000c300"
+	}
+	return OSConduitKey, OSConduit
+}
 
 var seaportABI = mustABI(`[
 	{"type":"function","name":"getCounter","stateMutability":"view","inputs":[{"name":"offerer","type":"address"}],"outputs":[{"type":"uint256"}]},
@@ -47,9 +60,10 @@ func SeaportCounter(ctx context.Context, c *ethclient.Client, offerer common.Add
 	return n, nil
 }
 
-// IsApprovedForConduit reports whether owner approved the OpenSea conduit on nft.
-func IsApprovedForConduit(ctx context.Context, c *ethclient.Client, nft, owner common.Address) (bool, error) {
-	vals, err := callView(ctx, c, nft, erc721ApprovalABI, "isApprovedForAll", owner, common.HexToAddress(OSConduit))
+// IsApprovedForConduit reports whether owner approved the chain's OpenSea conduit on nft.
+func IsApprovedForConduit(ctx context.Context, c *ethclient.Client, nft, owner common.Address, chainID int) (bool, error) {
+	_, conduit := ConduitFor(chainID)
+	vals, err := callView(ctx, c, nft, erc721ApprovalABI, "isApprovedForAll", owner, common.HexToAddress(conduit))
 	if err != nil {
 		return false, err
 	}
@@ -57,9 +71,10 @@ func IsApprovedForConduit(ctx context.Context, c *ethclient.Client, nft, owner c
 	return ok && b, nil
 }
 
-// BuildSetApprovalForAll returns calldata to approve the OpenSea conduit on nft.
-func BuildSetApprovalForAll() []byte {
-	data, _ := erc721ApprovalABI.Pack("setApprovalForAll", common.HexToAddress(OSConduit), true)
+// BuildSetApprovalForAll returns calldata to approve the chain's OpenSea conduit on nft.
+func BuildSetApprovalForAll(chainID int) []byte {
+	_, conduit := ConduitFor(chainID)
+	data, _ := erc721ApprovalABI.Pack("setApprovalForAll", common.HexToAddress(conduit), true)
 	return data
 }
 
@@ -121,6 +136,7 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 	offerer := gethcrypto.PubkeyToAddress(key.PublicKey)
 	startTime := big.NewInt(now)
 	endTime := big.NewInt(now + durationSec)
+	ckey, _ := ConduitFor(chainID) // chain's OpenSea conduit key (Robinhood differs from canonical)
 
 	// consideration: seller proceeds first, then each fee.
 	type consItem struct {
@@ -188,7 +204,7 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 		"offerer": offerer.Hex(), "zone": zoneHex,
 		"offer": offer, "consideration": consMsg,
 		"orderType": orderTypeStr, "startTime": startTime.String(), "endTime": endTime.String(),
-		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": OSConduitKey, "counter": counter.String(),
+		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": ckey, "counter": counter.String(),
 	}
 
 	td := apitypes.TypedData{
@@ -240,7 +256,7 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 		"offerer": offerer.Hex(), "zone": zoneHex,
 		"offer": offer, "consideration": consMsg, "orderType": z.OrderType,
 		"startTime": startTime.String(), "endTime": endTime.String(),
-		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": OSConduitKey,
+		"zoneHash": zoneHashHex, "salt": salt.String(), "conduitKey": ckey,
 		"totalOriginalConsiderationItems": len(consMsg), "counter": counter.String(),
 	}
 	return Listing{Parameters: params, Signature: hexutil.Encode(sig), Protocol: Seaport16}, digest, nil

@@ -194,6 +194,17 @@ func TestBuildListingUSDG(t *testing.T) {
 	if seller["startAmount"].(string) != "9750000" { // 10 USDG - 2.5% fee = 9.75 USDG
 		t.Fatalf("seller USDG amount = %v, want 9750000 (9.75 USDG)", seller["startAmount"])
 	}
+	// Robinhood (4663) listings must carry OpenSea's Robinhood conduit key, not the canonical
+	// one — OpenSea's listing validation rejects the wrong key.
+	if got := lst.Parameters["conduitKey"].(string); got != "0x61159fefdfada89302ed55f8b9e89e2d67d8258712b3a3f89aa88525877f1d5e" {
+		t.Fatalf("Robinhood conduitKey = %s, want the Robinhood OpenSea conduit key", got)
+	}
+	if k, addr := ConduitFor(4663); k != "0x61159fefdfada89302ed55f8b9e89e2d67d8258712b3a3f89aa88525877f1d5e" || addr != "0x963f00d3ff000064ffcba824b800c0000000c300" {
+		t.Fatalf("ConduitFor(4663) = %s / %s, want the Robinhood conduit key + address", k, addr)
+	}
+	if k, _ := ConduitFor(1); k != OSConduitKey {
+		t.Fatalf("ConduitFor(1) must be the canonical OpenSea conduit key")
+	}
 }
 
 func TestSeaportIncrementCounterSelector(t *testing.T) {

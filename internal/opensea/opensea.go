@@ -174,8 +174,8 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 func snip(b []byte) string {
 	s := string(b)
-	if len(s) > 200 {
-		return s[:200]
+	if len(s) > 400 {
+		return s[:400]
 	}
 	return s
 }
