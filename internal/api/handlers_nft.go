@@ -368,6 +368,7 @@ type nftStreamResult struct {
 	Slug     string    `json:"slug,omitempty"`
 	Done     bool      `json:"done,omitempty"`
 	Failed   int       `json:"failed,omitempty"`
+	Error    string    `json:"error,omitempty"` // set on Done when the run failed (e.g. expired key)
 }
 
 func (s *Server) handleNftItems(w http.ResponseWriter, r *http.Request) {
@@ -465,6 +466,7 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 	s.log.API(logger.INFO, "nft fetch started", map[string]any{"wallets": req.total, "contract": req.contract, "threads": req.threads})
 	var lastErrMu sync.Mutex
 	lastErr := ""
+	authFail := false // an expired/invalid OpenSea key won't recover across retry rounds
 	slug, _ := s.osc.ContractSlug(ctx, req.chainSlug, req.contract)
 
 	// One opensea client per proxy URL (reused), so wallets spread across IPs.
@@ -524,6 +526,9 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 					mu.Unlock()
 					lastErrMu.Lock()
 					lastErr = err.Error()
+					if strings.Contains(err.Error(), "opensea auth") {
+						authFail = true
+					}
 					lastErrMu.Unlock()
 					return
 				}
@@ -543,8 +548,21 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 		}
 		wg.Wait()
 		pending = next
+		lastErrMu.Lock()
+		af := authFail
+		lastErrMu.Unlock()
+		if af {
+			break // expired/invalid key won't recover — stop grinding retry rounds
+		}
 	}
-	pub(nftStreamResult{Done: true, Failed: len(pending), Slug: slug})
+	lastErrMu.Lock()
+	le := lastErr
+	lastErrMu.Unlock()
+	done := nftStreamResult{Done: true, Failed: len(pending), Slug: slug}
+	if len(pending) > 0 {
+		done.Error = le
+	}
+	pub(done)
 	failed := len(pending)
 	fields := map[string]any{"fetched": req.total - failed, "failed": failed, "wallets": req.total}
 	if failed > 0 {

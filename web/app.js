@@ -1303,8 +1303,12 @@ function nftOnResult(d){
   if(d.total) NFT_RUN.total=d.total;
   if(d.slug) NFT_SLUG=d.slug;
   if(d.done){
-    NFT_RUN.failed=d.failed||0; NFT_RUN.finished=true; updateNftProgress(); nftRender();
-    if(!NFT_ITEMS.length) toast("No NFTs found for the selected wallet(s)","info");
+    NFT_RUN.failed=d.failed||0; NFT_RUN.finished=true;
+    const authErr = d.error && /auth|api key|expired|invalid|unauthorized|401/i.test(d.error);
+    if(authErr) NFT_RUN.errMsg="OpenSea API key expired or invalid — update it in Settings → API Keys, then reload.";
+    updateNftProgress(); nftRender();
+    if(authErr) toast(NFT_RUN.errMsg,"error");
+    else if(!NFT_ITEMS.length) toast("No NFTs found for the selected wallet(s)","info");
     else if(d.failed) toast(`${d.failed} wallet(s) still failed after retries — add a proxy group / lower threads, then reload`,"info");
     return;
   }
@@ -1329,7 +1333,9 @@ function nftRender(){
   g.classList.toggle("listview", NFT_VIEW==="list");
   if(!NFT_ITEMS.length){
     const streaming = NFT_RUN && !NFT_RUN.finished;
-    g.innerHTML=`<div class="muted" style="padding:20px">${streaming?"Fetching NFTs from OpenSea…":"No NFTs found."}</div>`;
+    const err = NFT_RUN && NFT_RUN.errMsg;
+    g.innerHTML = err ? `<div class="warnbox" style="margin:16px">${escHtml(err)}</div>`
+      : `<div class="muted" style="padding:20px">${streaming?"Fetching NFTs from OpenSea…":"No NFTs found."}</div>`;
     nftUpdateBar(); return;
   }
   if(NFT_VIEW==="list"){

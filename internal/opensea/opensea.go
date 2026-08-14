@@ -103,6 +103,16 @@ func (c *Client) doRotating(ctx context.Context, method, path string, body []byt
 		rb, _ := io.ReadAll(resp.Body)
 		wait := retryAfterDur(resp)
 		resp.Body.Close()
+		// An expired / invalid key never recovers by retrying the same credentials — fail
+		// FAST with the clear reason. Otherwise every one of a 200-wallet fetch's calls
+		// burns ~7 backoff attempts (~14s) before erroring, so the whole run looks stuck at
+		// 0/N for minutes when the real problem is just an expired OPENSEA_API_KEY.
+		if resp.StatusCode == 401 {
+			low := strings.ToLower(string(rb))
+			if strings.Contains(low, "expired") || strings.Contains(low, "invalid") || strings.Contains(low, "unauthorized") {
+				return rb, resp.StatusCode, fmt.Errorf("opensea auth: %s", snip(rb))
+			}
+		}
 		// Retryable: 429/401/403 (throttled or bad key → wait then rotate key) and the
 		// transient gateway 5xx (502/503/504) OpenSea returns during brief outages — a
 		// hard fail there would abort a task resolve that a short backoff recovers.
