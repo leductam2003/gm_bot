@@ -1417,11 +1417,13 @@ async function loadListFloorFees(){
   try{ const f=await api("/nft/floor",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})}); NFT_FLOOR=Number(f.floor)||0; if(f.slug)NFT_SLUG=f.slug; LIST_ITEMS.forEach(it=>it.floor=NFT_FLOOR); }catch{}
   try{ const fe=await api("/nft/fees",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
     LIST_FEE_BPS=Number(fe.feeBps)||0;
+    LIST_CUR = fe.currency || "ETH"; // collection currency (e.g. USDG on Robinhood)
     $("listPlatFee").textContent=((Number(fe.platformBps)||0)/100).toFixed(1)+"%";
     $("listCreatorFee").textContent=((Number(fe.creatorBps)||0)/100).toFixed(1)+"%";
   }catch{}
   renderListRows();
 }
+let LIST_CUR="ETH";
 function renderListRows(){
   $("listRows").innerHTML=LIST_ITEMS.map((it,i)=>{
     const img=cssUrl(it.image)?`style="background-image:url('${cssUrl(it.image)}')"`:"";
@@ -1444,8 +1446,8 @@ function listPriceInput(i,v){
 }
 function recomputeList(){
   let total=0; LIST_ITEMS.forEach(it=>{ const p=Number(it.price); if(!isNaN(p)&&p>0) total+=p; });
-  $("listTotal").textContent=`${Number(total.toFixed(6))} ETH`;
-  $("listProceeds").textContent=`${Number((total*(1-LIST_FEE_BPS/10000)).toFixed(6))} ETH`;
+  $("listTotal").textContent=`${Number(total.toFixed(6))} ${LIST_CUR}`;
+  $("listProceeds").textContent=`${Number((total*(1-LIST_FEE_BPS/10000)).toFixed(6))} ${LIST_CUR}`;
 }
 function listApplyAll(){ const v=$("listSetAll").value.trim(); if(v==="") return; LIST_ITEMS.forEach(it=>it.price=v); renderListRows(); }
 async function listSetFloor(){ if(!NFT_FLOOR) await loadListFloorFees(); if(NFT_FLOOR){ LIST_ITEMS.forEach(it=>it.price=String(NFT_FLOOR)); renderListRows(); } else toast("No floor price available","info"); }
@@ -1462,7 +1464,9 @@ function listAdjustFees(){ const f=1-LIST_FEE_BPS/10000; if(f<=0) return toast("
   toast("Prices grossed up so proceeds ≈ the price you set","info");
 }
 async function nftListConfirm(){
-  const items=LIST_ITEMS.filter(it=>Number(it.price)>0).map(it=>({walletId:it.walletId,tokenId:it.tokenId,priceWei:ethToWei(it.price)}));
+  // Send the human price; the backend scales by the collection currency's decimals
+  // (USDG=6 on Robinhood, ETH=18) and builds the order in that token.
+  const items=LIST_ITEMS.filter(it=>Number(it.price)>0).map(it=>({walletId:it.walletId,tokenId:it.tokenId,price:String(it.price).trim()}));
   if(!items.length) return toast("Set a unit price first","error");
   const days=Number($("listDuration").value)||7;
   const contract=$("nftContract").value.trim(); const chainId=Number($("nftChain").value);

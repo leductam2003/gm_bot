@@ -211,6 +211,42 @@ func (c *Client) CollectionFees(ctx context.Context, slug string) ([]Fee, error)
 	return out, nil
 }
 
+// Currency is a collection's required listing payment token.
+type Currency struct {
+	Address  string `json:"address"`
+	Decimals int    `json:"decimals"`
+	Symbol   string `json:"symbol"`
+}
+
+// ListingCurrency returns the ERC-20 a collection requires for listings (e.g. USDG on
+// Robinhood), from pricing_currencies.listing_currency. ok=false → list in native ETH.
+func (c *Client) ListingCurrency(ctx context.Context, slug string) (Currency, bool) {
+	body, _, err := c.get(ctx, "/collections/"+slug)
+	if err != nil {
+		return Currency{}, false
+	}
+	return parseListingCurrency(body)
+}
+
+// parseListingCurrency reads pricing_currencies.listing_currency from a collection body.
+// Split out so the ERC-20/native decision is unit-testable without a live OpenSea call.
+func parseListingCurrency(body []byte) (Currency, bool) {
+	var r struct {
+		PricingCurrencies struct {
+			ListingCurrency Currency `json:"listing_currency"`
+		} `json:"pricing_currencies"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return Currency{}, false
+	}
+	cur := r.PricingCurrencies.ListingCurrency
+	// A native/zero-address currency means "list in ETH" — treat as no ERC-20 override.
+	if len(cur.Address) != 42 || cur.Decimals <= 0 || strings.EqualFold(cur.Address, zeroAddr) {
+		return Currency{}, false
+	}
+	return cur, true
+}
+
 // Floor returns the collection's current floor price (in ETH; 0 if unlisted/unknown).
 func (c *Client) Floor(ctx context.Context, slug string) (float64, error) {
 	body, _, err := c.get(ctx, "/collections/"+slug+"/stats")

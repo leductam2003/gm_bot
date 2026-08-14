@@ -657,7 +657,14 @@ func (s *Server) handleNftFees(w http.ResponseWriter, r *http.Request) {
 			creator += f.Bps
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"platformBps": platform, "creatorBps": creator, "feeBps": platform + creator, "slug": slug})
+	out := map[string]any{"platformBps": platform, "creatorBps": creator, "feeBps": platform + creator, "slug": slug}
+	// The collection's required listing currency (e.g. USDG on Robinhood) so the UI can
+	// label prices and the seller knows they're listing in that token, not ETH.
+	if cur, ok := s.osc.ListingCurrency(r.Context(), slug); ok {
+		out["currency"] = cur.Symbol
+		out["currencyDecimals"] = cur.Decimals
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // POST /api/nft/list {chainId, contractAddress, priceWei, durationSec, items:[{walletId,tokenId,priceWei}]}
@@ -667,12 +674,12 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ChainID         int    `json:"chainId"`
 		ContractAddress string `json:"contractAddress"`
-		PriceWei        string `json:"priceWei"` // fallback price for items without their own
+		Price           string `json:"price"` // human decimal fallback, in the collection's currency
 		DurationSec     int64  `json:"durationSec"`
 		Items           []struct {
 			WalletID int64  `json:"walletId"`
 			TokenID  string `json:"tokenId"`
-			PriceWei string `json:"priceWei"` // per-item price (overrides the fallback)
+			Price    string `json:"price"` // per-item human price, in the collection's currency
 		} `json:"items"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -683,7 +690,6 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "OpenSea API key not set")
 		return
 	}
-	fallbackPrice, _ := new(big.Int).SetString(strings.TrimSpace(body.PriceWei), 10)
 	if body.DurationSec <= 0 {
 		body.DurationSec = 30 * 86400
 	}
@@ -708,6 +714,16 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	for _, f := range osFees {
 		fees = append(fees, evm.Fee{Recipient: f.Recipient, Bps: f.Bps})
 	}
+	// Payment currency: some collections (e.g. Robinhood tokenized-stock NFTs) require an
+	// ERC-20 like USDG instead of native ETH — build the order in that token, with prices
+	// scaled by its decimals. No override → native ETH, 18 decimals.
+	var currency common.Address
+	decimals := 18
+	if cur, ok := s.osc.ListingCurrency(r.Context(), slug); ok {
+		currency = common.HexToAddress(cur.Address)
+		decimals = cur.Decimals
+	}
+	fallbackPrice, _ := parseUnits(strings.TrimSpace(body.Price), decimals)
 	// Match the collection's enforcement (Signed Zone V2 needs orderType 2 + a zone) by
 	// copying the zone/orderType from one of its existing OpenSea listings; else OPEN.
 	zone := evm.OrderZone{}
@@ -723,8 +739,8 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 	failedPrice := 0
 	for _, it := range body.Items {
 		p := fallbackPrice
-		if pw := strings.TrimSpace(it.PriceWei); pw != "" {
-			if v, ok := new(big.Int).SetString(pw, 10); ok {
+		if ps := strings.TrimSpace(it.Price); ps != "" {
+			if v, err := parseUnits(ps, decimals); err == nil {
 				p = v
 			}
 		}
@@ -778,7 +794,7 @@ func (s *Server) handleNftList(w http.ResponseWriter, r *http.Request) {
 				keepErr("bad token id " + li.tokenID)
 				continue
 			}
-			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt(), zone)
+			lst, berr := evm.BuildAndSignListing(key, body.ChainID, counter, contract, tokenID, li.price, fees, body.DurationSec, time.Now().Unix(), randSalt(), currency, zone)
 			if berr != nil {
 				failed++
 				keepErr("sign: " + berr.Error())

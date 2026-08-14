@@ -123,7 +123,7 @@ func TestBuildAndSignListing(t *testing.T) {
 	fees := []Fee{{Recipient: "0x0000a26b00c1F0DF003000390027140000fAa719", Bps: 250}} // 2.5%
 	salt := big.NewInt(12345)
 
-	lst, digest, err := buildAndSignListing(key, 1, big.NewInt(0), nft, big.NewInt(2102), price, fees, 30*86400, 1782000000, salt, OrderZone{})
+	lst, digest, err := buildAndSignListing(key, 1, big.NewInt(0), nft, big.NewInt(2102), price, fees, 30*86400, 1782000000, salt, common.Address{}, OrderZone{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,8 +161,38 @@ func TestBuildAndSignListing(t *testing.T) {
 	if osfee["startAmount"].(string) != "25000000000000000" {
 		t.Fatalf("OS fee = %v, want 0.025 ETH", osfee["startAmount"])
 	}
+	// Native listing: consideration is paid in ETH (itemType 0, zero token).
+	if seller["itemType"].(string) != "0" || seller["token"].(string) != common.HexToAddress(zeroAddr).Hex() {
+		t.Fatalf("native listing must use itemType 0 + zero token, got %v/%v", seller["itemType"], seller["token"])
+	}
 	if lst.Protocol != Seaport16 {
 		t.Fatalf("wrong protocol address")
+	}
+}
+
+// TestBuildListingUSDG proves an ERC-20 (USDG) listing uses itemType 1 + the token address
+// and amounts in the token's own units (the caller scaled by decimals) — the Robinhood case.
+func TestBuildListingUSDG(t *testing.T) {
+	key, _ := gethcrypto.GenerateKey()
+	nft := common.HexToAddress("0x9c890d7e4d9becb20f7b612d5df3c4157a0837dc")
+	usdg := common.HexToAddress("0x5fc5360d0400a0fd4f2af552add042d716f1d168")
+	price := big.NewInt(10_000_000) // 10 USDG (6 decimals)
+	fees := []Fee{{Recipient: "0x0000a26b00c1F0DF003000390027140000fAa719", Bps: 250}}
+
+	lst, err := BuildAndSignListing(key, 4663, big.NewInt(0), nft, big.NewInt(1), price, fees, 30*86400, 1782000000, big.NewInt(9), usdg, OrderZone{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cons := lst.Parameters["consideration"].([]interface{})
+	seller := cons[0].(map[string]interface{})
+	if seller["itemType"].(string) != "1" {
+		t.Fatalf("USDG listing must use itemType 1 (ERC-20), got %v", seller["itemType"])
+	}
+	if seller["token"].(string) != usdg.Hex() {
+		t.Fatalf("USDG listing token = %v, want %v", seller["token"], usdg.Hex())
+	}
+	if seller["startAmount"].(string) != "9750000" { // 10 USDG - 2.5% fee = 9.75 USDG
+		t.Fatalf("seller USDG amount = %v, want 9750000 (9.75 USDG)", seller["startAmount"])
 	}
 }
 

@@ -107,14 +107,16 @@ type OrderZone struct {
 // signs it EIP-712 with the owner key, and returns the OpenSea-ready payload.
 // Pure given (counter, fees, now, salt, zone) — port of zyper-mac/src/listing.ts buildOrder.
 func BuildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
-	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, z OrderZone) (Listing, error) {
-	lst, _, err := buildAndSignListing(key, chainID, counter, nft, tokenID, priceWei, fees, durationSec, now, salt, z)
+	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, currency common.Address, z OrderZone) (Listing, error) {
+	lst, _, err := buildAndSignListing(key, chainID, counter, nft, tokenID, priceWei, fees, durationSec, now, salt, currency, z)
 	return lst, err
 }
 
-// buildAndSignListing also returns the EIP-712 digest (for tests).
+// buildAndSignListing also returns the EIP-712 digest (for tests). currency is the payment
+// token: the zero address lists in native ETH (itemType 0); a non-zero ERC-20 (e.g. USDG on
+// Robinhood, which requires it) lists in that token (itemType 1) with amounts in its units.
 func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
-	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, z OrderZone) (Listing, []byte, error) {
+	nft common.Address, tokenID, priceWei *big.Int, fees []Fee, durationSec, now int64, salt *big.Int, currency common.Address, z OrderZone) (Listing, []byte, error) {
 
 	offerer := gethcrypto.PubkeyToAddress(key.PublicKey)
 	startTime := big.NewInt(now)
@@ -144,7 +146,15 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 	}
 
 	zero := "0"
-	native := common.HexToAddress(zeroAddr).Hex()
+	// Payment token: native ETH (itemType 0) by default, or an ERC-20 like USDG (itemType
+	// 1) when the collection requires a specific currency. Seaport amounts are already in
+	// the token's own units (the caller scales by its decimals).
+	payItemType := "0"
+	payToken := common.HexToAddress(zeroAddr).Hex()
+	if (currency != common.Address{}) {
+		payItemType = "1"
+		payToken = currency.Hex()
+	}
 
 	// Zone / orderType / zoneHash: default OPEN (0, no zone). A restricted order carries
 	// the collection's zone so OpenSea accepts Signed-Zone-V2 enforced listings.
@@ -164,12 +174,12 @@ func buildAndSignListing(key *ecdsa.PrivateKey, chainID int, counter *big.Int,
 		"startAmount": "1", "endAmount": "1",
 	}}
 	consMsg := []interface{}{map[string]interface{}{
-		"itemType": "0", "token": native, "identifierOrCriteria": zero,
+		"itemType": payItemType, "token": payToken, "identifierOrCriteria": zero,
 		"startAmount": toSeller.String(), "endAmount": toSeller.String(), "recipient": offerer.Hex(),
 	}}
 	for _, fi := range feeItems {
 		consMsg = append(consMsg, map[string]interface{}{
-			"itemType": "0", "token": native, "identifierOrCriteria": zero,
+			"itemType": payItemType, "token": payToken, "identifierOrCriteria": zero,
 			"startAmount": fi.amount.String(), "endAmount": fi.amount.String(), "recipient": fi.recipient.Hex(),
 		})
 	}
