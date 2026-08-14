@@ -374,6 +374,8 @@
           <div class="panel-head">
             <div class="title"><span id="nftCount">0 NFTs</span> <span class="sub" id="nftWalletInfo"></span> <span class="sub" id="nftFloor"></span></div>
             <div class="toolbtns">
+              <select class="sm" id="nftFilter" onchange="nftRender()" title="Filter by listing status"><option value="all">All</option><option value="listed">Listed</option><option value="unlisted">Unlisted</option></select>
+              <select class="sm" id="nftSort" onchange="nftRender()" title="Sort"><option value="none">Sort</option><option value="price-asc">Price &uarr;</option><option value="price-desc">Price &darr;</option><option value="id-asc">Token # &uarr;</option><option value="id-desc">Token # &darr;</option></select>
               <button class="sm" id="nftViewBtn" onclick="nftToggleView()">List view</button>
               <button class="sm" onclick="nftFetchFloor()">Floor price</button>
               <button class="icon" title="Reload" onclick="nftLoad()"><svg class="i" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>

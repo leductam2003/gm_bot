@@ -501,10 +501,13 @@ func (c *Client) AccountNFTs(ctx context.Context, chain, address, collection str
 
 // MakerListedTokenIDs returns the set of token IDs the maker currently has listed
 // for a collection (best-effort; an error returns an empty set).
-func (c *Client) MakerListedTokenIDs(ctx context.Context, chain, slug, maker, contract string) map[string]bool {
-	set := map[string]bool{}
+// MakerListings returns the maker's active listings in a collection as tokenID → human
+// price (in the listing currency). Presence in the map = the token is listed; the value is
+// its price (0 if OpenSea didn't report one). Used to mark + sort NFTs by listing price.
+func (c *Client) MakerListings(ctx context.Context, chain, slug, maker, contract string) map[string]float64 {
+	out := map[string]float64{}
 	if slug == "" {
-		return set
+		return out
 	}
 	// /api/v2/listings/collection/{slug}/all returns active listings for the collection.
 	next := ""
@@ -518,7 +521,7 @@ func (c *Client) MakerListedTokenIDs(ctx context.Context, chain, slug, maker, co
 		}
 		body, _, err := c.get(ctx, fmt.Sprintf("/listings/collection/%s/all?%s", slug, q.Encode()))
 		if err != nil {
-			return set
+			return out
 		}
 		var r struct {
 			Listings []struct {
@@ -531,19 +534,26 @@ func (c *Client) MakerListedTokenIDs(ctx context.Context, chain, slug, maker, co
 						} `json:"offer"`
 					} `json:"parameters"`
 				} `json:"protocol_data"`
+				Price struct {
+					Current struct {
+						Decimals int    `json:"decimals"`
+						Value    string `json:"value"`
+					} `json:"current"`
+				} `json:"price"`
 			} `json:"listings"`
 			Next string `json:"next"`
 		}
 		if err := json.Unmarshal(body, &r); err != nil {
-			return set
+			return out
 		}
 		for _, l := range r.Listings {
 			if strings.ToLower(l.ProtocolData.Parameters.Offerer) != lm {
 				continue
 			}
+			price := listingPrice(l.Price.Current.Value, l.Price.Current.Decimals)
 			for _, o := range l.ProtocolData.Parameters.Offer {
 				if strings.ToLower(o.Token) == lc {
-					set[o.IdentifierOrCriteria] = true
+					out[o.IdentifierOrCriteria] = price
 				}
 			}
 		}
@@ -552,5 +562,14 @@ func (c *Client) MakerListedTokenIDs(ctx context.Context, chain, slug, maker, co
 			break
 		}
 	}
-	return set
+	return out
+}
+
+// listingPrice converts an OpenSea base-unit price string to a human float using decimals.
+func listingPrice(value string, decimals int) float64 {
+	v, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0
+	}
+	return v / math.Pow10(decimals)
 }

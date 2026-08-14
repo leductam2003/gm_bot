@@ -332,12 +332,13 @@ func (s *Server) handleNftResolveLink(w http.ResponseWriter, r *http.Request) {
 }
 
 type nftItem struct {
-	WalletID int64  `json:"walletId"`
-	Owner    string `json:"owner"`
-	TokenID  string `json:"tokenId"`
-	Name     string `json:"name"`
-	Image    string `json:"image"`
-	Listed   bool   `json:"listed"`
+	WalletID  int64   `json:"walletId"`
+	Owner     string  `json:"owner"`
+	TokenID   string  `json:"tokenId"`
+	Name      string  `json:"name"`
+	Image     string  `json:"image"`
+	Listed    bool    `json:"listed"`
+	ListPrice float64 `json:"listPrice,omitempty"` // active listing price (in the collection currency)
 }
 
 // POST /api/nft/items {chainId, contractAddress, walletIds?, group?}
@@ -532,15 +533,16 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 					lastErrMu.Unlock()
 					return
 				}
-				listed := osc.MakerListedTokenIDs(ctx, req.chainSlug, slug, sw.addr, req.contract)
+				listings := osc.MakerListings(ctx, req.chainSlug, slug, sw.addr, req.contract)
 				out := []nftItem{}
 				for _, n := range nfts {
 					if slug == "" && !strings.EqualFold(n.Contract, req.contract) {
 						continue
 					}
+					price, isListed := listings[n.TokenID]
 					out = append(out, nftItem{
 						WalletID: sw.id, Owner: sw.addr, TokenID: n.TokenID,
-						Name: n.Name, Image: n.Image, Listed: listed[n.TokenID],
+						Name: n.Name, Image: n.Image, Listed: isListed, ListPrice: price,
 					})
 				}
 				pub(nftStreamResult{Index: i, WalletID: sw.id, Owner: sw.addr, Items: out, Slug: slug})
