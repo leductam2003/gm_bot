@@ -11,7 +11,7 @@ import (
 )
 
 // Version is the running build, shown in the UI and used for update checks.
-const Version = "1.3.7"
+const Version = "1.3.8"
 
 // LoadDotEnv reads KEY=VALUE lines from path and sets them in the environment if
 // not already set. Missing file is not an error.

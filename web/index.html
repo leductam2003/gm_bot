@@ -224,7 +224,7 @@
                   <label class="fld" style="grid-column:1/-1">Etherscan API Key <span class="muted" style="text-transform:none">— ABI fetch / tx-replay decode (all EVM chains). <a href="https://etherscan.io/myapikey" target="_blank">Get one</a></span>
                     <div class="row" style="margin:0;gap:6px"><input id="setEtherscan" type="password" placeholder="paste Etherscan key (optional)" style="flex:1" /><button class="icon" title="Show/Hide" onclick="toggleReveal('setEtherscan')">👁</button></div></label>
                 </div>
-                <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px"><button class="primary sm" onclick="saveApiKeys()">Save Keys</button><input id="genKeyCount" type="number" min="1" max="20" value="5" style="width:56px" title="How many free keys to fetch" /><button class="sm" onclick="genOpenseaKeys()" title="Generate free OpenSea keys (POST /auth/keys) and append them">+ Fetch free keys</button><span class="muted" id="setKeysStatus"></span></div>
+                <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px"><button class="primary sm" onclick="saveApiKeys()">Save Keys</button><input id="genKeyCount" type="number" min="1" max="20" value="5" style="width:56px" title="How many free keys to fetch" /><button class="sm" onclick="genOpenseaKeys()" title="Generate free OpenSea keys (POST /auth/keys) and append them">+ Fetch free keys</button><button class="sm" onclick="testOpenseaKeys()" title="Remove any keys past their expiry (recorded when generated)">Test &amp; clean</button><span class="muted" id="setKeysStatus"></span></div>
               </div>
               <div class="card">
                 <h2>Appearance</h2>

@@ -1626,6 +1626,21 @@ async function genOpenseaKeys(){
   }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
   finally{ if(btn){ btn.disabled=false; btn.textContent="+ Fetch free keys"; } }
 }
+// Remove keys past their recorded expiry (OpenSea's read API can't validate a key live, so
+// the test uses the 7-day expiry saved when a key was generated). Manually-pasted keys have
+// no recorded expiry and are kept.
+async function testOpenseaKeys(){
+  const btn=event&&event.target, st=$("setKeysStatus");
+  if(btn){ btn.disabled=true; btn.textContent="Testing…"; }
+  if(st) st.textContent="checking key expiries…";
+  try{
+    const r=await api("/opensea/testkeys",{method:"POST"});
+    if($("setOpensea")) $("setOpensea").value=r.keys||"";
+    if(st) st.textContent=`${r.valid} valid · ${r.removed} expired removed${r.unknown?` · ${r.unknown} untracked`:""}`;
+    toast(r.removed ? `Removed ${r.removed} expired key(s) — ${r.valid} left` : `${r.valid} key(s) OK, none expired${r.unknown?` (${r.unknown} manual keys can't be checked)`:""}`, "success");
+  }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="Test & clean"; } }
+}
 // ---- Settings sub-tabs + app config (Appearance / Discord / Task defaults) ----
 let APP_CFG = {};
 function goSub(sub){

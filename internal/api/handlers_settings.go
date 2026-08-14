@@ -71,6 +71,7 @@ func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
 		n = 20
 	}
 	var added []string
+	addedExp := map[string]int64{}
 	lastErr := ""
 	for i := 0; i < n; i++ {
 		if r.Context().Err() != nil {
@@ -82,13 +83,14 @@ func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 			}
 		}
-		k, err := genOpenSeaKey(r.Context())
+		k, exp, err := genOpenSeaKey(r.Context())
 		if err != nil {
 			lastErr = err.Error()
 			continue
 		}
 		if k != "" {
 			added = append(added, k)
+			addedExp[k] = exp
 		}
 	}
 	if len(added) == 0 {
@@ -118,19 +120,37 @@ func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = os.Setenv("OPENSEA_API_KEY", joined) // apply live (doRotating re-reads per request)
+	// Record each new key's expiry, pruned to the keys still in the list (for the test button).
+	expMap := s.loadKeyExp()
+	for k, e := range addedExp {
+		if e > 0 {
+			expMap[k] = e
+		}
+	}
+	cur := map[string]bool{}
+	for _, k := range all {
+		cur[k] = true
+	}
+	for k := range expMap {
+		if !cur[k] {
+			delete(expMap, k)
+		}
+	}
+	s.saveKeyExp(expMap)
 	writeJSON(w, http.StatusOK, map[string]any{"added": newCount, "total": len(all), "keys": joined})
 }
 
 // genOpenSeaKey requests one free API key from OpenSea's keyless generator, retrying a
-// few times on 429 (the generator throttles bursts).
-func genOpenSeaKey(ctx context.Context) (string, error) {
+// few times on 429 (the generator throttles bursts). Returns the key and its expiry
+// (unix seconds; 0 if OpenSea didn't provide one) so the test button can prune stale keys.
+func genOpenSeaKey(ctx context.Context) (string, int64, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-time.After(time.Duration(attempt) * 1500 * time.Millisecond):
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return "", 0, ctx.Err()
 			}
 		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.opensea.io/api/v2/auth/keys", nil)
@@ -148,17 +168,89 @@ func genOpenSeaKey(ctx context.Context) (string, error) {
 			continue
 		}
 		if sc >= 400 {
-			return "", fmt.Errorf("opensea %d", sc)
+			return "", 0, fmt.Errorf("opensea %d", sc)
 		}
 		var out struct {
-			APIKey string `json:"api_key"`
+			APIKey    string `json:"api_key"`
+			ExpiresAt string `json:"expires_at"`
 		}
 		if json.Unmarshal(b, &out) == nil && out.APIKey != "" {
-			return out.APIKey, nil
+			var exp int64
+			if t, e := time.Parse(time.RFC3339, out.ExpiresAt); e == nil {
+				exp = t.Unix()
+			}
+			return out.APIKey, exp, nil
 		}
 		lastErr = fmt.Errorf("no api_key in response")
 	}
-	return "", lastErr
+	return "", 0, lastErr
+}
+
+// key→expiry (unix) metadata for generated keys, so the test button can drop stale ones
+// (OpenSea's read API doesn't reject expired keys, so this recorded expiry is the only
+// reliable signal). Stored separately from the key list, which stays a plain newline blob.
+func (s *Server) loadKeyExp() map[string]int64 {
+	m := map[string]int64{}
+	if v, err := s.st.GetSetting("opensea.keyexp"); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &m)
+	}
+	return m
+}
+func (s *Server) saveKeyExp(m map[string]int64) {
+	b, _ := json.Marshal(m)
+	_ = s.st.SetSetting("opensea.keyexp", string(b))
+}
+func maskKey(k string) string {
+	if len(k) <= 10 {
+		return k
+	}
+	return k[:6] + "…" + k[len(k)-4:]
+}
+
+// POST /api/opensea/testkeys — remove keys past their recorded expiry, keeping the rest.
+// OpenSea's read endpoints accept any key (they don't reject expired/invalid ones), so a
+// live probe can't tell validity; the 7-day expiry recorded when a key was generated is
+// the reliable signal. Keys with no recorded expiry (manually pasted) are kept — we can't
+// determine them and never drop a maybe-good key.
+func (s *Server) handleOpenSeaTestKeys(w http.ResponseWriter, r *http.Request) {
+	keys := config.OpenSeaKeys()
+	expMap := s.loadKeyExp()
+	now := time.Now().Unix()
+	var live []string
+	removed, unknown := 0, 0
+	type detail struct {
+		Key    string `json:"key"`
+		Status string `json:"status"`
+	}
+	details := []detail{}
+	for _, k := range keys {
+		exp, known := expMap[k]
+		switch {
+		case known && exp <= now:
+			removed++
+			delete(expMap, k)
+			details = append(details, detail{maskKey(k), "expired — removed"})
+		case known:
+			live = append(live, k)
+			days := (exp - now) / 86400
+			details = append(details, detail{maskKey(k), fmt.Sprintf("valid (~%dd left)", days)})
+		default:
+			live = append(live, k)
+			unknown++
+			details = append(details, detail{maskKey(k), "kept (no expiry recorded — pasted manually)"})
+		}
+	}
+	joined := strings.Join(live, "\n")
+	if err := s.st.SetSetting("cfg.OPENSEA_API_KEY", joined); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = os.Setenv("OPENSEA_API_KEY", joined)
+	s.saveKeyExp(expMap)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tested": len(keys), "valid": len(live), "removed": removed, "unknown": unknown,
+		"keys": joined, "details": details,
+	})
 }
 
 // GET /api/appsettings — the app config blob (Discord webhook, task defaults, etc.).

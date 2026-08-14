@@ -66,7 +66,8 @@ func (s *Server) Router(webDir string) http.Handler {
 
 		r.Get("/settings", s.handleGetSettings)
 		r.Post("/settings", s.handleSetSettings)
-		r.Post("/opensea/genkeys", s.handleOpenSeaGenKeys) // fetch free OpenSea API keys, append + save
+		r.Post("/opensea/genkeys", s.handleOpenSeaGenKeys)   // fetch free OpenSea API keys, append + save
+		r.Post("/opensea/testkeys", s.handleOpenSeaTestKeys) // drop keys past their recorded expiry
 		r.Get("/appsettings", s.handleGetAppSettings)
 		r.Post("/appsettings", s.handleSetAppSettings)
 		r.Post("/discord/test", s.handleDiscordTest)
