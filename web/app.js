@@ -1418,6 +1418,7 @@ async function loadListFloorFees(){
   try{ const fe=await api("/nft/fees",{method:"POST",body:JSON.stringify({chainId,contractAddress:contract,slug:NFT_SLUG})});
     LIST_FEE_BPS=Number(fe.feeBps)||0;
     LIST_CUR = fe.currency || "ETH"; // collection currency (e.g. USDG on Robinhood)
+    if($("listSetAllCur")) $("listSetAllCur").textContent=LIST_CUR; // "Set all to … <cur>"
     $("listPlatFee").textContent=((Number(fe.platformBps)||0)/100).toFixed(1)+"%";
     $("listCreatorFee").textContent=((Number(fe.creatorBps)||0)/100).toFixed(1)+"%";
   }catch{}
