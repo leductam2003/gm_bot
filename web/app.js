@@ -1302,6 +1302,7 @@ function nftOnResult(d){
   if(!NFT_RUN || d.runId!==NFT_RUN.id) return;
   if(d.total) NFT_RUN.total=d.total;
   if(d.slug) NFT_SLUG=d.slug;
+  if(d.cur) LIST_CUR=d.cur; // collection listing currency → price badges show the right unit
   if(d.done){
     NFT_RUN.failed=d.failed||0; NFT_RUN.finished=true;
     const authErr = d.error && /auth|api key|expired|invalid|unauthorized|401/i.test(d.error);

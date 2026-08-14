@@ -367,6 +367,7 @@ type nftStreamResult struct {
 	Owner    string    `json:"owner,omitempty"`
 	Items    []nftItem `json:"items,omitempty"`
 	Slug     string    `json:"slug,omitempty"`
+	Cur      string    `json:"cur,omitempty"` // collection listing currency (e.g. USDG) for price badges
 	Done     bool      `json:"done,omitempty"`
 	Failed   int       `json:"failed,omitempty"`
 	Error    string    `json:"error,omitempty"` // set on Done when the run failed (e.g. expired key)
@@ -469,6 +470,13 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 	lastErr := ""
 	authFail := false // an expired/invalid OpenSea key won't recover across retry rounds
 	slug, _ := s.osc.ContractSlug(ctx, req.chainSlug, req.contract)
+	// Authoritative collection listing currency (works even with zero existing listings),
+	// so price badges read "1 USDG" not "1 ETH". Resolved once; MakerListings' own currency
+	// (from an active listing) is used first when present.
+	collCur := ""
+	if lc, ok := s.osc.ListingCurrency(ctx, slug); ok {
+		collCur = lc.Symbol
+	}
 
 	// One opensea client per proxy URL (reused), so wallets spread across IPs.
 	oscByProxy := map[string]*opensea.Client{}
@@ -533,7 +541,7 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 					lastErrMu.Unlock()
 					return
 				}
-				listings := osc.MakerListings(ctx, req.chainSlug, slug, sw.addr, req.contract)
+				listings, cur := osc.MakerListings(ctx, req.chainSlug, slug, sw.addr, req.contract)
 				out := []nftItem{}
 				for _, n := range nfts {
 					if slug == "" && !strings.EqualFold(n.Contract, req.contract) {
@@ -545,7 +553,10 @@ func (s *Server) streamNftItems(ctx context.Context, req nftStreamReq) {
 						Name: n.Name, Image: n.Image, Listed: isListed, ListPrice: price,
 					})
 				}
-				pub(nftStreamResult{Index: i, WalletID: sw.id, Owner: sw.addr, Items: out, Slug: slug})
+				if cur == "" {
+						cur = collCur
+					}
+					pub(nftStreamResult{Index: i, WalletID: sw.id, Owner: sw.addr, Items: out, Slug: slug, Cur: cur})
 			}(idx)
 		}
 		wg.Wait()
