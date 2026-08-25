@@ -392,6 +392,15 @@ let WSEL = new Set(), SEND_WID = null;
 let WALLET_GROUPS = new Set((()=>{ try { return JSON.parse(localStorage.getItem("walletGroups")||'["main"]'); } catch { return ["main"]; } })());
 function saveWGroups(){ try { localStorage.setItem("walletGroups", JSON.stringify([...WALLET_GROUPS])); } catch {} }
 async function newWGroup(){ const g=await promptDialog("New Wallet Group","Group name"); if(g){ WALLET_GROUPS.add(g); saveWGroups(); CUR_WGROUP=g; renderWallets(); toast(`Group "${g}" created — add wallets to it`,"success"); } }
+async function delWGroup(g, ev){ if(ev) ev.stopPropagation();
+  const ws = WALLETS.filter(w=>w.group===g);
+  if(ws.length && !await confirmDialog(`Delete group "${g}" and PERMANENTLY remove its ${ws.length} wallet(s) and their private keys? This cannot be undone.`,"Delete")) return;
+  for(const w of ws){ await api("/wallets/"+w.id,{method:"DELETE"}).catch(()=>{}); }
+  WALLET_GROUPS.delete(g); saveWGroups();
+  if(CUR_WGROUP===g) CUR_WGROUP="";
+  WSEL.clear(); loadWallets();
+  toast(`Group "${g}" deleted`,"info");
+}
 // Group picker for the Generate/Import modals: a <select> of existing wallet
 // groups plus a "＋ New group…" sentinel that reveals a text input. Pick from the
 // list by default; only type when creating a brand-new group.
@@ -415,7 +424,7 @@ function renderWallets() {
   const groups = {}; WALLETS.forEach(w=>{ WALLET_GROUPS.add(w.group); groups[w.group]=(groups[w.group]||0)+1; });
   WALLET_GROUPS.forEach(g=>{ if(!(g in groups)) groups[g]=0; });   // show empty groups too
   $("walletGroups").innerHTML = Object.entries(groups).map(([g,n])=>
-    `<div class="gcard ${g===CUR_WGROUP?'active':''}" onclick="pickWGroup('${g}')"><div class="gtitle">${IC.box} <span>${g}</span></div><div class="gcounts">${n} Wallets</div></div>`).join("")
+    `<div class="gcard ${g===CUR_WGROUP?'active':''}" onclick="pickWGroup('${g}')"><div class="gtitle">${IC.box} <span>${g}</span><span class="gdel" title="Delete group" onclick="delWGroup('${g}',event)">${IC.trash}</span></div><div class="gcounts">${n} Wallets</div></div>`).join("")
     + `<div class="gcard add" onclick="newWGroup()">+ New Group</div>`;
   const shown = shownWallets();
   const idset=new Set(WALLETS.map(w=>w.id)); [...WSEL].forEach(id=>{ if(!idset.has(id)) WSEL.delete(id); }); // prune stale
@@ -1800,15 +1809,38 @@ async function saveApiKeys(){
 // Fetch N free OpenSea keys (server calls POST /auth/keys), append + save them, and show
 // the merged list. Free keys expire ~7 days & are rate-limited, so grab several to rotate.
 async function genOpenseaKeys(){
-  const n=Math.max(1,Math.min(20,Number(($("genKeyCount")||{}).value)||5));
-  const btn=event&&event.target, st=$("setKeysStatus");
+  const proxyGroup=($("genKeyProxy")||{}).value||"";
+  const cap=proxyGroup?200:20;
+  const n=Math.max(1,Math.min(cap,Number(($("genKeyCount")||{}).value)||10));
+  const threads=Math.max(1,Math.min(100,Number(($("genKeyThreads")||{}).value)||1));
+  const btn=event&&event.target, st=$("genKeyStatus");
   if(btn){ btn.disabled=true; btn.textContent="Fetching…"; }
-  if(st) st.textContent=`fetching ${n} key(s)…`;
+  if(st) st.textContent=`0/${n} fetched…`;
   try{
-    const r=await api("/opensea/genkeys",{method:"POST",body:JSON.stringify({count:n})});
-    if($("setOpensea")) $("setOpensea").value=r.keys||"";
-    if(st) st.textContent=`+${r.added} added · ${r.total} total (saved & applied)`;
-    toast(`Fetched ${r.added} free OpenSea key(s) — ${r.total} total, live now`,"success");
+    // Streaming NDJSON: the server emits one line per attempt so the count updates live
+    // (keys are saved+applied as they arrive, not at the end).
+    const headers={"Content-Type":"application/json"};
+    try{ const t=localStorage.getItem("zyperAuthToken"); if(t) headers["X-Auth-Token"]=t; }catch{}
+    const res=await fetch("/api/opensea/genkeys",{method:"POST",headers,body:JSON.stringify({count:n,proxyGroup,threads})});
+    if(!res.body){ throw new Error("stream unsupported (HTTP "+res.status+")"); }
+    const reader=res.body.getReader(), dec=new TextDecoder(); let buf="";
+    for(;;){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let nl; while((nl=buf.indexOf("\n"))>=0){
+        const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line) continue;
+        let m; try{ m=JSON.parse(line); }catch{ continue; }
+        if(m.done){
+          if($("setOpensea")) $("setOpensea").value=m.keys||"";
+          if(st) st.textContent=`+${m.added} added · ${m.total} total (saved & applied)`;
+          toast(m.added ? `Fetched ${m.added} free OpenSea key(s) — ${m.total} total, live now`
+                        : ("no keys generated"+(m.error?": "+m.error:"")), m.added?"success":"error");
+        } else if(st){
+          st.textContent=`${m.count||0}/${n} fetched · ${m.tried||0} tried…`;
+        }
+      }
+    }
   }catch(e){ if(st) st.textContent=""; toast(e.message,"error"); }
   finally{ if(btn){ btn.disabled=false; btn.textContent="+ Fetch free keys"; } }
 }
@@ -1816,7 +1848,7 @@ async function genOpenseaKeys(){
 // the test uses the 7-day expiry saved when a key was generated). Manually-pasted keys have
 // no recorded expiry and are kept.
 async function testOpenseaKeys(){
-  const btn=event&&event.target, st=$("setKeysStatus");
+  const btn=event&&event.target, st=$("genKeyStatus");
   if(btn){ btn.disabled=true; btn.textContent="Testing…"; }
   if(st) st.textContent="checking key expiries…";
   try{
@@ -1830,8 +1862,27 @@ async function testOpenseaKeys(){
 // ---- Settings sub-tabs + app config (Appearance / Discord / Task defaults) ----
 let APP_CFG = {};
 function goSub(sub){
-  ["app","setup","social"].forEach(s=>{ const p=$("sub-"+s); if(p) p.classList.toggle("hide", s!==sub); });
+  ["app","keys","setup","social"].forEach(s=>{ const p=$("sub-"+s); if(p) p.classList.toggle("hide", s!==sub); });
   document.querySelectorAll("#tab-settings .subnav-item").forEach(a=>a.classList.toggle("active", a.dataset.sub===sub));
+  if(sub==="keys") fillGenKeyProxies();
+}
+// Populate the "grab free keys" proxy-group dropdown from the live proxy list, tracking
+// each group's proxy count so Threads can default to it (1 thread per proxy IP).
+let GENKEY_PROXY_COUNTS={};
+async function fillGenKeyProxies(){
+  const sel=$("genKeyProxy"); if(!sel) return;
+  const cur=sel.value;
+  GENKEY_PROXY_COUNTS={};
+  try{ const ps=await api("/proxies")||[]; ps.forEach(p=>{ const g=p.group||p.groupName||p.GroupName; if(g) GENKEY_PROXY_COUNTS[g]=(GENKEY_PROXY_COUNTS[g]||0)+1; }); }catch{}
+  const groups=Object.keys(GENKEY_PROXY_COUNTS);
+  sel.innerHTML=`<option value="">— your IP only (serialized) —</option>`+groups.map(g=>`<option value="${escHtml(g)}">${escHtml(g)} (${GENKEY_PROXY_COUNTS[g]} prox${GENKEY_PROXY_COUNTS[g]===1?'y':'ies'})</option>`).join("");
+  if(cur) sel.value=cur;
+  onGenKeyProxyChange();
+}
+// Picking a proxy group defaults Threads to its proxy count (>1 thread per IP → 429).
+function onGenKeyProxyChange(){
+  const g=($("genKeyProxy")||{}).value||"", th=$("genKeyThreads"); if(!th) return;
+  th.value = (g && GENKEY_PROXY_COUNTS[g]) ? Math.min(100, GENKEY_PROXY_COUNTS[g]) : 1;
 }
 // Appearance scale (per-machine, localStorage; applied instantly + on boot)
 function applyScale(v){ v=Math.max(80,Math.min(150,Number(v)||100)); document.documentElement.style.zoom = (v/100); const lbl=$("setScaleVal"); if(lbl) lbl.textContent=v+"%"; const sl=$("setScale"); if(sl) sl.value=v; }

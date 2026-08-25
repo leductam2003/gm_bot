@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,12 @@ type Engine struct {
 	// bounds concurrent receipt polls. Neither ever gates the fire path.
 	prepSem    chan struct{}
 	receiptSem chan struct{}
+	// voucherSem bounds concurrent OpenSea voucher fetches across ALL wallets. OpenSea
+	// rate-limits vouchers ~4/window/IP and answers a limit as HTTP 200 "Too Many
+	// Requests"; a 200-wallet fleet firing at once self-429s. Capping the burst (with
+	// per-wallet proxy rotation) keeps it under the limit. Pre-signed armed wallets
+	// don't fetch at fire time, so this never gates the FCFS broadcast.
+	voucherSem chan struct{}
 
 	// cacheMu guards the brief DB-read caches below — at a 1000-task fire second,
 	// per-wallet SQLite reads would serialize the hot path on the single connection.
@@ -70,6 +77,7 @@ func New(st *store.Store, vault *crypto.Vault, pool *rpc.Pool, log *logger.Logge
 		feeCache:   map[string]*feeEntry{},
 		prepSem:    make(chan struct{}, 256), // ~4 RPCs/wallet ≈ bounded, race-safe prep throughput
 		receiptSem: make(chan struct{}, 64),
+		voucherSem: make(chan struct{}, 12), // keep the OpenSea voucher burst under the rate limit
 		urlCache:   map[int]urlCacheEntry{},
 	}
 }
@@ -483,6 +491,32 @@ func (e *Engine) appConfig() map[string]any {
 	e.appCfg, e.appCfgAt = m, time.Now()
 	e.cacheMu.Unlock()
 	return m
+}
+
+// openSeaSlug resolves the OpenSea chain slug for chainID for the voucher path: the
+// registry slug, else a user-defined custom chain's name normalized (Robinhood ->
+// "robinhood"). Returns "" if unknown — callers must NOT fall back to a wrong chain
+// (e.g. ethereum), which queries a DIFFERENT drop and OpenSea answers DropNotFound, so
+// the allowlist/public voucher always fails. Mirrors the API's openSeaChainSlug.
+func (e *Engine) openSeaSlug(chainID int) string { return openSeaSlugFrom(chainID, e.appConfig()) }
+
+func openSeaSlugFrom(chainID int, appCfg map[string]any) string {
+	if sl, err := chains.SlugFromChainID(chainID); err == nil && sl != "" {
+		return sl
+	}
+	ccs, _ := appCfg["customChains"].([]any)
+	for _, it := range ccs {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, _ := m["id"].(float64); int(id) == chainID {
+			if name, _ := m["name"].(string); strings.TrimSpace(name) != "" {
+				return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", ""))
+			}
+		}
+	}
+	return ""
 }
 
 func numCfg(m map[string]any, k string) float64 {

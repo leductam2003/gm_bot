@@ -34,7 +34,7 @@
       <a data-tab="logs"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span><span class="lbl">Logs</span></a>
     </nav>
     <div class="sb-foot">
-      <div class="verline"><span id="footVer">v1.3.2</span><span class="upd" onclick="go('settings');goSub('app');setTimeout(checkUpdate,300)" style="cursor:pointer">CHECK UPDATES</span></div>
+      <div class="verline"><span id="footVer">v1.3.16</span><span class="upd" onclick="go('settings');goSub('app');setTimeout(checkUpdate,300)" style="cursor:pointer">CHECK UPDATES</span></div>
       <div class="clock"><svg class="i" viewBox="0 0 24 24"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg> <span id="clock">00:00:00</span> <span class="drift">+2.3s</span></div>
       <div class="gwei"><svg class="i" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg> <span class="lbl">ETH</span> <b id="gwei">&mdash;</b> <span style="font-size:9px;color:var(--muted3)">gwei</span></div>
     </div>
@@ -203,6 +203,7 @@
         <div class="settings-wrap">
           <div class="subnav">
             <a class="subnav-item active" data-sub="app" onclick="goSub('app')">APP</a>
+            <a class="subnav-item" data-sub="keys" onclick="goSub('keys')">API KEYS</a>
             <a class="subnav-item" data-sub="setup" onclick="goSub('setup')">SETUP</a>
             <a class="subnav-item" data-sub="social" onclick="goSub('social')">SOCIAL</a>
           </div>
@@ -210,21 +211,10 @@
             <!-- ===== APP ===== -->
             <div id="sub-app">
               <div class="card">
-                <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.2</span></div></div>
+                <div class="panel-head"><div class="title">Updates <span class="sub" id="updVer">v1.3.16</span></div></div>
                 <p class="muted" style="margin-top:-4px">Auto-checks on open and every 5 minutes. When a newer build is published, Install downloads and unpacks it next to the exe (your data — wallets, tasks, keys — is untouched), then asks you to restart.</p>
                 <label class="fld">Update source (GitHub owner/repo)<input id="setUpdRepo" placeholder="leductam2003/gm_bot" /></label>
                 <div class="row" style="margin-top:12px"><button class="primary sm" onclick="checkUpdate()">Check for Update</button><button class="sm" onclick="saveUpdRepo()">Save Repo</button><button class="primary sm" id="updInstallBtn" style="display:none" onclick="installUpdate()">Install &amp; Restart</button><span class="muted" id="updStatus"></span></div>
-              </div>
-              <div class="card">
-                <h2>API Keys</h2>
-                <p class="muted" style="margin-top:-4px">Set keys here instead of editing the .env file — saved on this machine and applied immediately.</p>
-                <div class="grid">
-                  <label class="fld" style="grid-column:1/-1">OpenSea API Keys <span class="muted" style="text-transform:none">— one per line; rotated to spread the rate limit, fails over if one is throttled. <a href="https://docs.opensea.io/reference/api-keys" target="_blank">Get one</a></span>
-                    <textarea id="setOpensea" rows="2" placeholder="paste one or more OpenSea keys, one per line"></textarea></label>
-                  <label class="fld" style="grid-column:1/-1">Etherscan API Key <span class="muted" style="text-transform:none">— ABI fetch / tx-replay decode (all EVM chains). <a href="https://etherscan.io/myapikey" target="_blank">Get one</a></span>
-                    <div class="row" style="margin:0;gap:6px"><input id="setEtherscan" type="password" placeholder="paste Etherscan key (optional)" style="flex:1" /><button class="icon" title="Show/Hide" onclick="toggleReveal('setEtherscan')">👁</button></div></label>
-                </div>
-                <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px"><button class="primary sm" onclick="saveApiKeys()">Save Keys</button><input id="genKeyCount" type="number" min="1" max="20" value="5" style="width:56px" title="How many free keys to fetch" /><button class="sm" onclick="genOpenseaKeys()" title="Generate free OpenSea keys (POST /auth/keys) and append them">+ Fetch free keys</button><button class="sm" onclick="testOpenseaKeys()" title="Remove any keys past their expiry (recorded when generated)">Test &amp; clean</button><span class="muted" id="setKeysStatus"></span></div>
               </div>
               <div class="card">
                 <h2>Appearance</h2>
@@ -246,6 +236,30 @@
                   <button class="sm" onclick="testDiscord()">Test</button>
                 </div>
                 <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveDiscord()">Save</button><span class="muted" id="setDiscordStatus"></span></div>
+              </div>
+            </div>
+            <!-- ===== API KEYS ===== -->
+            <div id="sub-keys" class="hide">
+              <div class="card">
+                <h2>API Keys</h2>
+                <p class="muted" style="margin-top:-4px">Set keys here instead of editing the .env file — saved on this machine and applied immediately.</p>
+                <div class="grid">
+                  <label class="fld" style="grid-column:1/-1">OpenSea API Keys <span class="muted" style="text-transform:none">— one per line; rotated to spread the rate limit (used on drop for the mint voucher too), fails over if one is throttled. <a href="https://docs.opensea.io/reference/api-keys" target="_blank">Get one</a></span>
+                    <textarea id="setOpensea" rows="4" placeholder="paste one or more OpenSea keys, one per line"></textarea></label>
+                  <label class="fld" style="grid-column:1/-1">Etherscan API Key <span class="muted" style="text-transform:none">— ABI fetch / tx-replay decode (all EVM chains). <a href="https://etherscan.io/myapikey" target="_blank">Get one</a></span>
+                    <div class="row" style="margin:0;gap:6px"><input id="setEtherscan" type="password" placeholder="paste Etherscan key (optional)" style="flex:1" /><button class="icon" title="Show/Hide" onclick="toggleReveal('setEtherscan')">👁</button></div></label>
+                </div>
+                <div class="row" style="margin-top:12px"><button class="primary sm" onclick="saveApiKeys()">Save Keys</button><span class="muted" id="setKeysStatus"></span></div>
+              </div>
+              <div class="card">
+                <h2>Grab Free OpenSea Keys</h2>
+                <p class="muted" style="margin-top:-4px">OpenSea's generator rate-limits per IP. Pick a <b>proxy group</b> to grab many keys in parallel across different IPs — without one, it stays serialized on your IP (max 20). <b>Threads</b> = how many run at once; keep it ≤ your proxy count (more than that shares IPs → 429). Keys expire ~7 days; a bigger pool = fewer 429s on a big drop.</p>
+                <div class="grid" style="grid-template-columns:1fr 110px 110px;gap:12px;align-items:end">
+                  <label class="fld">Proxy group (for parallel grab)<select id="genKeyProxy" onchange="onGenKeyProxyChange()"><option value="">— your IP only (serialized) —</option></select></label>
+                  <label class="fld">Threads<input id="genKeyThreads" type="number" min="1" max="100" value="1" title="Parallel workers — set to your proxy count" /></label>
+                  <label class="fld">How many<input id="genKeyCount" type="number" min="1" max="200" value="10" title="How many free keys to fetch" /></label>
+                </div>
+                <div class="row" style="margin-top:12px;flex-wrap:wrap;gap:8px"><button class="primary sm" onclick="genOpenseaKeys()" title="Generate free OpenSea keys (POST /auth/keys, multi-threaded over the proxy group) and append them">+ Fetch free keys</button><button class="sm" onclick="testOpenseaKeys()" title="Remove any keys past their expiry (recorded when generated)">Test &amp; clean</button><span class="muted" id="genKeyStatus"></span></div>
               </div>
             </div>
             <!-- ===== SETUP ===== -->

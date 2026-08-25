@@ -24,6 +24,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"zyperbot/internal/config"
 )
 
 const openseaGQL = "https://gql.opensea.io/graphql"
@@ -44,12 +46,18 @@ func mintActionHash() string {
 	return "d8454b30426e34f3d5acec5f012d1bdedf31bb44199a83c9b6d05ff52fff8302"
 }
 
-func gqlHeaders(req *http.Request, op string) {
+func (c *Client) gqlHeaders(req *http.Request, op string) {
 	req.Header.Set("accept", "application/graphql-response+json, application/json")
 	req.Header.Set("referer", "https://opensea.io/")
 	req.Header.Set("x-app-id", "os2-web")
 	req.Header.Set("x-graphql-operation-name", op)
 	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
+	// Rotate an API key across the pool. The mint voucher is fetched per-wallet at drop
+	// time; sending a rotated key spreads OpenSea's per-key rate limit across the pool so
+	// a fleet doesn't 429 on one key (proxies handle the per-IP limit in parallel).
+	if keys := config.OpenSeaKeys(); len(keys) > 0 {
+		req.Header.Set("x-api-key", keys[int(c.keyIdx.Add(1)-1)%len(keys)])
+	}
 }
 
 // Stage is one SeaDrop mint phase.
@@ -76,7 +84,7 @@ func (c *Client) MintStages(ctx context.Context, slug string) (string, []Stage, 
 	if err != nil {
 		return "", nil, err
 	}
-	gqlHeaders(req, "MintQuery")
+	c.gqlHeaders(req, "MintQuery")
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return "", nil, err
@@ -183,22 +191,43 @@ func (c *Client) MintVoucher(ctx context.Context, minter, nftContract string, qt
 	q.Set("operationName", "MintActionTimelineQuery")
 	q.Set("variables", string(varsJSON))
 	q.Set("extensions", `{"persistedQuery":{"sha256Hash":"`+mintActionHash()+`","version":1}}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openseaGQL+"?"+q.Encode(), nil)
-	if err != nil {
-		return Voucher{}, err
+	// Retry transient rate-limit/gateway responses with backoff. A 429 here must NOT be
+	// mistaken for ineligibility: the caller falls back to on-chain mintPublic, which for
+	// an allowlist-only drop reverts (burning gas, missing the mint). The backoff lets the
+	// per-IP window reset; gqlHeaders rotates a key each attempt. FCFS accepts a little
+	// latency over losing an eligible wallet to a momentary 429.
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 && !sleepCtx(ctx, backoffDur(attempt)) {
+			return Voucher{}, ctx.Err()
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, openseaGQL+"?"+q.Encode(), nil)
+		if err != nil {
+			return Voucher{}, err
+		}
+		c.gqlHeaders(req, "MintActionTimelineQuery")
+		resp, err := c.httpClient(proxyURL).Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		sc := resp.StatusCode
+		resp.Body.Close()
+		// OpenSea's gql endpoint returns rate limits as HTTP 200 with {"errors":[{"message":
+		// "Too Many Requests"}]} — NOT a 429 — so a status-only check misses it and the
+		// caller treats a throttled wallet as ineligible. Detect the body too and back off.
+		if sc == 429 || sc == 403 || sc >= 500 || isRateLimitBody(body) {
+			lastErr = fmt.Errorf("opensea voucher rate-limited (%d) — add a proxy group for a fleet: %s", sc, snip(body))
+			continue
+		}
+		if strings.Contains(string(body), "PersistedQueryNotFound") {
+			// hash rotated — resend as full-text POST (OpenSea accepts it).
+			return c.mintVoucherFullText(ctx, minter, nftContract, qty, chainSlug, proxyURL)
+		}
+		return parseSwap(body)
 	}
-	gqlHeaders(req, "MintActionTimelineQuery")
-	resp, err := c.httpClient(proxyURL).Do(req)
-	if err != nil {
-		return Voucher{}, err
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if strings.Contains(string(body), "PersistedQueryNotFound") {
-		// hash rotated — resend as full-text POST (OpenSea accepts it).
-		return c.mintVoucherFullText(ctx, minter, nftContract, qty, chainSlug, proxyURL)
-	}
-	return parseSwap(body)
+	return Voucher{}, lastErr
 }
 
 const mintActionQuery = `query MintActionTimelineQuery($address: Address!, $fromAssets: [AssetQuantityInput!]!, $toAssets: [AssetQuantityInput!]!, $recipient: Address, $capabilities: WalletCapabilities) {
@@ -221,7 +250,7 @@ func (c *Client) mintVoucherFullText(ctx context.Context, minter, nftContract st
 	if err != nil {
 		return Voucher{}, err
 	}
-	gqlHeaders(req, "MintActionTimelineQuery")
+	c.gqlHeaders(req, "MintActionTimelineQuery")
 	req.Header.Set("content-type", "application/json")
 	resp, err := c.httpClient(proxyURL).Do(req)
 	if err != nil {
@@ -229,7 +258,18 @@ func (c *Client) mintVoucherFullText(ctx context.Context, minter, nftContract st
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if resp.StatusCode == 429 || resp.StatusCode >= 500 || isRateLimitBody(body) {
+		return Voucher{}, fmt.Errorf("opensea voucher rate-limited (%d) — add a proxy group for a fleet: %s", resp.StatusCode, snip(body))
+	}
 	return parseSwap(body)
+}
+
+// isRateLimitBody reports whether a gql response body is a rate-limit reply. OpenSea
+// returns these as HTTP 200 with a "Too Many Requests" message in the errors envelope,
+// so the HTTP status alone can't detect them.
+func isRateLimitBody(body []byte) bool {
+	l := strings.ToLower(string(body))
+	return strings.Contains(l, "too many requests") || strings.Contains(l, "rate limit") || strings.Contains(l, "ratelimit")
 }
 
 // parseSwap extracts {to,data,value} from a swap MINT response.

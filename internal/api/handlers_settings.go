@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"zyperbot/internal/config"
@@ -60,44 +62,70 @@ func (s *Server) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 // so generating several lets the app rotate across them (e.g. a 200-wallet NFT fetch).
 func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Count int `json:"count"`
+		Count      int    `json:"count"`
+		ProxyGroup string `json:"proxyGroup"`
+		Threads    int    `json:"threads"` // parallel workers (0 = auto from proxy count)
 	}
 	_ = decode(r, &body)
 	n := body.Count
 	if n < 1 {
 		n = 1
 	}
-	if n > 20 { // each key allows only 30 writes/hour — don't hammer the generator
-		n = 20
-	}
-	var added []string
-	addedExp := map[string]int64{}
-	lastErr := ""
-	for i := 0; i < n; i++ {
-		if r.Context().Err() != nil {
-			break
-		}
-		if i > 0 { // space out calls — the generator rate-limits bursts (429)
-			select {
-			case <-time.After(600 * time.Millisecond):
-			case <-r.Context().Done():
+	// Proxies let us grab keys in parallel across DIFFERENT IPs, so OpenSea's per-IP
+	// generator 429 no longer caps the batch — allow a much larger pull. Without proxies
+	// every request shares one IP, so stay small and serialized to avoid a 429 storm.
+	var proxies []string
+	if strings.TrimSpace(body.ProxyGroup) != "" {
+		if ps, err := s.st.ListProxiesByGroup(body.ProxyGroup); err == nil {
+			for _, p := range ps {
+				proxies = append(proxies, p.URL)
 			}
 		}
-		k, exp, err := genOpenSeaKey(r.Context())
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		if k != "" {
-			added = append(added, k)
-			addedExp[k] = exp
+	}
+	maxN, workers := 20, 1
+	if len(proxies) > 0 {
+		maxN = 200
+		workers = len(proxies) // auto default: one worker per proxy IP
+		if workers > 16 {
+			workers = 16
 		}
 	}
-	if len(added) == 0 {
-		writeErr(w, http.StatusBadGateway, "couldn't generate any key: "+lastErr)
-		return
+	// Explicit thread count from the UI overrides the auto default (bounded 1..100).
+	if body.Threads > 0 {
+		workers = body.Threads
+		if workers > 100 {
+			workers = 100
+		}
 	}
-	// Merge with existing keys, dedup, preserve order.
+	if n > maxN {
+		n = maxN
+	}
+
+	// Stream NDJSON progress so the UI shows a LIVE success count as keys arrive, instead
+	// of a frozen spinner until the whole batch finishes. Each grabbed key is saved+applied
+	// immediately (so it's usable at once and survives the tab closing mid-grab).
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering so flushes reach the client
+	flusher, _ := w.(http.Flusher)
+	enc := json.NewEncoder(w)
+	var wmu sync.Mutex // ResponseWriter isn't safe for concurrent writes
+	emit := func(v any) {
+		wmu.Lock()
+		_ = enc.Encode(v)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		wmu.Unlock()
+	}
+	emit(map[string]any{"n": n, "count": 0, "tried": 0}) // stream opened
+
+	// Overall deadline so a batch through many dead proxies still returns what it got.
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	// Start from the existing pool so each incremental save keeps prior keys.
+	var mu sync.Mutex
 	seen := map[string]bool{}
 	var all []string
 	for _, k := range config.OpenSeaKeys() {
@@ -106,44 +134,88 @@ func (s *Server) handleOpenSeaGenKeys(w http.ResponseWriter, r *http.Request) {
 			all = append(all, k)
 		}
 	}
-	newCount := 0
-	for _, k := range added {
-		if !seen[k] {
-			seen[k] = true
-			all = append(all, k)
-			newCount++
-		}
+	addedExp := map[string]int64{}
+	ok, tried := 0, 0
+	lastErr := ""
+
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			px := ""
+			if len(proxies) > 0 {
+				px = proxies[i%len(proxies)] // spread requests across proxy IPs
+			}
+			k, exp, err := genOpenSeaKey(ctx, px)
+			mu.Lock()
+			tried++
+			fresh := err == nil && k != "" && !seen[k]
+			if fresh {
+				seen[k] = true
+				all = append(all, k)
+				addedExp[k] = exp
+				ok++
+				// Save the growing pool under mu (never a stale shrink) — key is live now.
+				joined := strings.Join(all, "\n")
+				_ = s.st.SetSetting("cfg.OPENSEA_API_KEY", joined)
+				_ = os.Setenv("OPENSEA_API_KEY", joined)
+			} else if err != nil {
+				lastErr = err.Error()
+			}
+			cOK, cTried, poolTotal := ok, tried, len(all)
+			mu.Unlock()
+			if fresh {
+				emit(map[string]any{"count": cOK, "tried": cTried, "total": poolTotal, "added": maskKey(k)})
+			} else {
+				emit(map[string]any{"count": cOK, "tried": cTried})
+			}
+		}(i)
 	}
+	wg.Wait()
+
+	// Record expiries (pruned to current keys) and close the stream.
+	mu.Lock()
 	joined := strings.Join(all, "\n")
-	if err := s.st.SetSetting("cfg.OPENSEA_API_KEY", joined); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	_ = os.Setenv("OPENSEA_API_KEY", joined) // apply live (doRotating re-reads per request)
-	// Record each new key's expiry, pruned to the keys still in the list (for the test button).
+	total, added := len(all), ok
+	mu.Unlock()
 	expMap := s.loadKeyExp()
 	for k, e := range addedExp {
 		if e > 0 {
 			expMap[k] = e
 		}
 	}
-	cur := map[string]bool{}
+	curSet := map[string]bool{}
 	for _, k := range all {
-		cur[k] = true
+		curSet[k] = true
 	}
 	for k := range expMap {
-		if !cur[k] {
+		if !curSet[k] {
 			delete(expMap, k)
 		}
 	}
 	s.saveKeyExp(expMap)
-	writeJSON(w, http.StatusOK, map[string]any{"added": newCount, "total": len(all), "keys": joined})
+	emit(map[string]any{"done": true, "added": added, "total": total, "keys": joined, "error": lastErr})
 }
 
 // genOpenSeaKey requests one free API key from OpenSea's keyless generator, retrying a
 // few times on 429 (the generator throttles bursts). Returns the key and its expiry
 // (unix seconds; 0 if OpenSea didn't provide one) so the test button can prune stale keys.
-func genOpenSeaKey(ctx context.Context) (string, int64, error) {
+func genOpenSeaKey(ctx context.Context, proxyURL string) (string, int64, error) {
+	// Short timeout so a dead/slow proxy fails fast (a live one connects quickly).
+	hc := &http.Client{Timeout: 10 * time.Second}
+	if proxyURL != "" {
+		if pu, err := url.Parse(proxyURL); err == nil {
+			hc.Transport = &http.Transport{Proxy: http.ProxyURL(pu)}
+		}
+	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -155,10 +227,11 @@ func genOpenSeaKey(ctx context.Context) (string, int64, error) {
 		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.opensea.io/api/v2/auth/keys", nil)
 		req.Header.Set("accept", "application/json")
-		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
-			lastErr = err
-			continue
+			// A transport error (dead proxy / DNS / TLS) won't recover by retrying the
+			// same credentials — fail fast so one bad proxy doesn't burn 3× the timeout.
+			return "", 0, err
 		}
 		b, _ := io.ReadAll(resp.Body)
 		sc := resp.StatusCode

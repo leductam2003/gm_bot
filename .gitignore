@@ -23,6 +23,9 @@ vault.key
 *.dc.html
 original-reference.png
 
+# Node deps (mcp-mint MCP server)
+node_modules/
+
 # Tooling / editor
 .omc/
 .DS_Store

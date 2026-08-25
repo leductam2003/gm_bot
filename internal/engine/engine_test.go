@@ -62,6 +62,33 @@ func TestWeiToEth(t *testing.T) {
 	}
 }
 
+func TestOpenSeaSlugFrom(t *testing.T) {
+	// Registry chain → its slug (works without any custom-chain config).
+	if got := openSeaSlugFrom(1, nil); got != "ethereum" {
+		t.Fatalf("chain 1 slug = %q, want ethereum", got)
+	}
+	if got := openSeaSlugFrom(8453, nil); got != "base" {
+		t.Fatalf("chain 8453 slug = %q, want base", got)
+	}
+	// Custom chain (Robinhood 4663) is NOT in the registry — must resolve from its
+	// configured name, else the voucher queries "ethereum" and OpenSea says DropNotFound.
+	cfg := map[string]any{"customChains": []any{
+		map[string]any{"id": float64(4663), "name": "Robinhood"},
+	}}
+	if got := openSeaSlugFrom(4663, cfg); got != "robinhood" {
+		t.Fatalf("robinhood slug = %q, want robinhood (the DropNotFound bug)", got)
+	}
+	// Unknown custom chain with no config → "" (caller must NOT guess a chain).
+	if got := openSeaSlugFrom(4663, nil); got != "" {
+		t.Fatalf("unconfigured custom chain slug = %q, want empty", got)
+	}
+	// Name with spaces normalizes to a slug.
+	cfg2 := map[string]any{"customChains": []any{map[string]any{"id": float64(9999), "name": "My Chain"}}}
+	if got := openSeaSlugFrom(9999, cfg2); got != "mychain" {
+		t.Fatalf("spaced name slug = %q, want mychain", got)
+	}
+}
+
 func TestRedactErr(t *testing.T) {
 	// go-ethereum transport errors embed the full RPC URL whose path can be a secret
 	// token — the redaction must strip it to host-only before it hits the UI/log.
